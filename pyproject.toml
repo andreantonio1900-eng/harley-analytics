@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harley-analytics"
+version = "0.2.0"
+description = "CLI local para análise do banco frota_harley.duckdb"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "duckdb>=1.0.0",
+  "pandas>=2.0.0",
+  "typer>=0.12.0",
+  "rich>=13.0.0",
+  "plotly>=5.0.0",
+  "streamlit>=1.35.0"
+]
+
+[project.scripts]
+harley = "app.cli:app"
+
+[tool.setuptools]
+packages = ["app"]
