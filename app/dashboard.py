@@ -11,6 +11,8 @@ from app.db import connect
 from app import queries
 from app.model_detail import render_matrix_detail_selector
 
+HARLEY_ORANGE = "#FF6A13"
+
 
 @dataclass(frozen=True)
 class DashboardFilters:
@@ -48,6 +50,12 @@ def get_info(db_path: str):
 def get_share_by_uf(db_path: str, competencia: str):
     con = get_connection(db_path)
     return queries.share_by_uf(con, competencia=competencia)
+
+
+@st.cache_data
+def get_top_models_national(db_path: str, competencia: str):
+    con = get_connection(db_path)
+    return queries.top_models_national(con, competencia=competencia)
 
 
 @st.cache_data
@@ -94,7 +102,7 @@ def get_model_year_registrations_matrix(db_path: str, ano_fabricacao: int, compe
 
 def render_sidebar(default_db_path: str) -> DashboardFilters:
     with st.sidebar:
-        st.header("Configurações")
+        st.header("Filtros")
         db_path = st.text_input("Banco DuckDB", value=default_db_path)
         if not Path(db_path).expanduser().exists():
             st.error(f"Banco não encontrado: {db_path}")
@@ -132,6 +140,7 @@ def render_sidebar(default_db_path: str) -> DashboardFilters:
 def render_kpis(db_path: str):
     kpi = get_info(db_path)
     row = kpi.iloc[0]
+    st.caption("Como ler: este bloco dá contexto da base inteira, para você saber período coberto, volume total e amplitude do portfólio.")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Primeira competência", str(row["primeira_competencia"]))
     c2.metric("Última competência", str(row["ultima_competencia"]))
@@ -144,16 +153,46 @@ def render_share_by_uf(db_path: str, competencia: str):
 
     col1, col2 = st.columns((1, 1))
     with col1:
-        st.subheader(f"Share por UF | {competencia}")
+        st.subheader("Frota por UF")
+        st.caption(f"Competência: {competencia}")
+        st.caption("Como ler: use esta visão para localizar concentração geográfica. Os primeiros estados são onde a frota está mais forte hoje.")
         st.dataframe(uf_df, use_container_width=True, hide_index=True)
     with col2:
         fig_uf = px.bar(
             uf_df,
             x="uf",
             y="total_hd_uf",
-            title=f"Frota Harley por UF | {competencia}",
+            title=f"Frota por UF | {competencia}",
+            color_discrete_sequence=[HARLEY_ORANGE],
         )
         st.plotly_chart(fig_uf, use_container_width=True)
+
+
+def render_top_models_national(db_path: str, competencia: str):
+    top_df = get_top_models_national(db_path, competencia)
+
+    st.subheader("Harleys mais prevalentes no país")
+    st.caption(f"Competência: {competencia}")
+    st.caption("Como ler: este ranking mostra os modelos com maior estoque nacional no mês selecionado. É a melhor visão para entender o topo do parque circulante.")
+
+    col1, col2 = st.columns((1, 1))
+    with col1:
+        st.dataframe(top_df, use_container_width=True, hide_index=True, height=540)
+    with col2:
+        fig_top = px.bar(
+            top_df,
+            x="total",
+            y="marca_modelo",
+            orientation="h",
+            title=f"Top 30 modelos no Brasil | {competencia}",
+            color_discrete_sequence=[HARLEY_ORANGE],
+        )
+        fig_top.update_layout(
+            yaxis={"categoryorder": "total ascending"},
+            xaxis_title="Unidades",
+            yaxis_title="Modelo",
+        )
+        st.plotly_chart(fig_top, use_container_width=True)
 
 
 def render_sem_info_view(db_path: str, competencia: str, ano_fabricacao: int):
@@ -163,8 +202,9 @@ def render_sem_info_view(db_path: str, competencia: str, ano_fabricacao: int):
     top_models_df = get_sem_info_my_top_models(db_path, competencia, ano_fabricacao)
     model_series_df = get_sem_info_my_model_series(db_path, ano_fabricacao)
 
-    st.subheader(f"Proxy de estoque pendente de emplacamento | MY {ano_fabricacao}")
-    st.caption("Regra de negócio: `SEM INFORMAÇÃO` entra como proxy de estoque em rampa para o ano-modelo selecionado. A leitura considera a janela entre o ano anterior e o ano do próprio MY, porque o estoque costuma aparecer no fim do ano corrente e início do seguinte antes do emplacamento.")
+    st.subheader(f"Estoque pendente de emplacamento | MY {ano_fabricacao}")
+    st.caption("Proxy: registros com `SEM INFORMAÇÃO` dentro da janela MY-1 até MY.")
+    st.caption("Como ler: pense aqui como um termômetro de estoque em rampa. Se esse bloco sobe, há mais unidades do MY selecionado ainda aguardando emplacamento.")
 
     if ano_competencia not in {ano_fabricacao - 1, ano_fabricacao}:
         st.info(f"A competência {competencia} está fora da janela operacional deste proxy para o MY {ano_fabricacao}. Use competências em {ano_fabricacao - 1} ou {ano_fabricacao}.")
@@ -182,14 +222,17 @@ def render_sem_info_view(db_path: str, competencia: str, ano_fabricacao: int):
 
     col1, col2 = st.columns((1, 1))
     with col1:
-        st.subheader(f"Top modelos | {competencia}")
+        st.subheader("Top modelos")
+        st.caption(f"Competência: {competencia}")
+        st.caption("Como ler: a tabela mostra quais modelos mais puxam esse estoque pendente no mês selecionado.")
         st.dataframe(top_models_df, use_container_width=True, hide_index=True, height=420)
     with col2:
         fig_top = px.bar(
             top_models_df.head(12),
             x="marca_modelo",
             y="total_sem_info",
-            title=f"Top modelos em `SEM INFORMAÇÃO` | MY {ano_fabricacao} | {competencia}",
+            title=f"Top modelos | MY {ano_fabricacao} | {competencia}",
+            color_discrete_sequence=[HARLEY_ORANGE],
         )
         st.plotly_chart(fig_top, use_container_width=True)
 
@@ -200,7 +243,7 @@ def render_sem_info_view(db_path: str, competencia: str, ano_fabricacao: int):
         x="competencia_label",
         y="total_sem_info",
         markers=True,
-        title=f"Série histórica de `SEM INFORMAÇÃO` | MY {ano_fabricacao}",
+        title=f"Evolução do estoque pendente | MY {ano_fabricacao}",
     )
     fig_series.update_layout(
         xaxis_title="Competência",
@@ -218,7 +261,7 @@ def render_sem_info_view(db_path: str, competencia: str, ano_fabricacao: int):
             y="total_sem_info",
             color="marca_modelo",
             markers=True,
-            title=f"Série histórica por modelo | `SEM INFORMAÇÃO` | MY {ano_fabricacao}",
+            title=f"Evolução por modelo | MY {ano_fabricacao}",
         )
         fig_detail.update_layout(
             xaxis_title="Competência",
@@ -296,46 +339,54 @@ def render_models_by_year(db_path: str, ano_fabricacao: int, competencia: str):
     registrations_df = get_model_year_registrations_matrix(db_path, ano_fabricacao, competencia)
     ano_competencia = competencia[:4]
 
-    st.subheader(f"Matriz de frota por modelo | MY {ano_fabricacao} | {ano_competencia}")
-    st.caption("Linhas mostram todos os modelos do ano-modelo selecionado. As colunas seguem a evolução mensal da frota dentro do ano da competência escolhida.")
-    render_matrix_detail_selector(
-        matrix_df,
-        db_path=db_path,
-        competencia=competencia,
-        ano_fabricacao=ano_fabricacao,
-        key="fleet_matrix",
-    )
-    render_matrix_line_chart(
-        matrix_df,
-        title=f"Evolução da frota | principais modelos MY {ano_fabricacao}",
-        y_axis_title="Frota",
-    )
-    st.divider()
-    st.subheader(f"Matriz de emplacamentos por modelo | MY {ano_fabricacao} | {ano_competencia}")
-    st.caption("Cada célula representa o incremento mensal da frota versus a competência anterior. Janeiro usa dezembro do ano anterior como base de comparação.")
-    render_matrix_detail_selector(
-        registrations_df,
-        db_path=db_path,
-        competencia=competencia,
-        ano_fabricacao=ano_fabricacao,
-        key="registrations_matrix",
-    )
-    render_matrix_line_chart(
-        registrations_df,
-        title=f"Emplacamentos mensais | principais modelos MY {ano_fabricacao}",
-        y_axis_title="Emplacamentos",
-    )
+    st.subheader(f"Modelos | MY {ano_fabricacao}")
+    st.caption(f"Competência: {competencia}")
+    st.caption("Como ler: aqui o foco sai do macro e entra no mix de produto. Use as abas para alternar entre estoque acumulado e emplacamentos mensais.")
+
+    tab_frota, tab_emplacamentos = st.tabs(["Frota", "Emplacamentos"])
+
+    with tab_frota:
+        st.caption("Como ler: cada linha é um modelo. As colunas mostram a evolução do estoque ao longo do ano. Selecione uma linha para abrir o detalhe.")
+        render_matrix_detail_selector(
+            matrix_df,
+            db_path=db_path,
+            competencia=competencia,
+            ano_fabricacao=ano_fabricacao,
+            key="fleet_matrix",
+        )
+        render_matrix_line_chart(
+            matrix_df,
+            title=f"Evolução da frota | MY {ano_fabricacao}",
+            y_axis_title="Frota",
+        )
+
+    with tab_emplacamentos:
+        st.caption("Como ler: aqui cada célula representa entrada do mês, não estoque. É a melhor visão para entender ritmo de emplacamento por modelo.")
+        render_matrix_detail_selector(
+            registrations_df,
+            db_path=db_path,
+            competencia=competencia,
+            ano_fabricacao=ano_fabricacao,
+            key="registrations_matrix",
+        )
+        render_matrix_line_chart(
+            registrations_df,
+            title=f"Emplacamentos mensais | MY {ano_fabricacao}",
+            y_axis_title="Emplacamentos",
+        )
 
 
 def render_dashboard(default_db_path: str):
     st.title("Harley Analytics")
-    st.caption("Painel local para explorar indicadores macro e recortes agregados da frota Harley-Davidson")
+    st.caption("Visão macro da frota Harley-Davidson")
 
     filters = render_sidebar(default_db_path)
 
     render_kpis(filters.db_path)
     st.divider()
     render_share_by_uf(filters.db_path, filters.competencia)
+    st.divider()
+    render_top_models_national(filters.db_path, filters.competencia)
     st.divider()
     render_sem_info_view(filters.db_path, filters.competencia, filters.ano_fabricacao)
     st.divider()

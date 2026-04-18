@@ -36,6 +36,20 @@ def info(con):
     return query_df(con, sql)
 
 
+def top_models_national(con, competencia: str, limit: int = 30):
+    sql = '''
+    SELECT
+      marca_modelo,
+      SUM(qtd_veiculos) AS total
+    FROM frota_harley
+    WHERE competencia = ?
+    GROUP BY marca_modelo
+    ORDER BY total DESC, marca_modelo
+    LIMIT ?
+    '''
+    return query_df(con, sql, [competencia, limit])
+
+
 def sem_info_my_monthly_series(con, ano_modelo: int):
     sql = '''
     WITH catalogo AS (

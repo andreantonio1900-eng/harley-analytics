@@ -8,6 +8,8 @@ import streamlit as st
 from app.db import connect
 from app import queries
 
+HARLEY_ORANGE = "#FF6A13"
+
 
 DETAIL_PAGE_PATH = "pages/modelo_detalhe.py"
 
@@ -162,6 +164,7 @@ def render_model_detail_page():
             x="uf",
             y="total",
             title=f"Frota por UF | {modelo}",
+            color_discrete_sequence=[HARLEY_ORANGE],
         )
         st.plotly_chart(fig_uf, use_container_width=True)
 
