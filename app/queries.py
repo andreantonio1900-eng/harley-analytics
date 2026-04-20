@@ -36,6 +36,33 @@ def info(con):
     return query_df(con, sql)
 
 
+def fleet_national_snapshot(con, competencia: str):
+    sql = '''
+    WITH monthly AS (
+      SELECT
+        competencia,
+        SUM(qtd_veiculos) AS frota_total
+      FROM frota_harley
+      GROUP BY competencia
+    ),
+    deltas AS (
+      SELECT
+        competencia,
+        frota_total,
+        100.0 * (frota_total - LAG(frota_total) OVER (ORDER BY competencia))
+          / NULLIF(LAG(frota_total) OVER (ORDER BY competencia), 0) AS mom_pct
+      FROM monthly
+    )
+    SELECT
+      competencia,
+      frota_total,
+      mom_pct
+    FROM deltas
+    WHERE competencia = ?
+    '''
+    return query_df(con, sql, [competencia])
+
+
 def top_models_national(con, competencia: str, limit: int = 30):
     sql = '''
     SELECT
@@ -48,6 +75,249 @@ def top_models_national(con, competencia: str, limit: int = 30):
     LIMIT ?
     '''
     return query_df(con, sql, [competencia, limit])
+
+
+def top_model_year_national(con, competencia: str):
+    sql = '''
+    SELECT
+      ano_fabricacao,
+      SUM(qtd_veiculos) AS total
+    FROM frota_harley
+    WHERE competencia = ?
+      AND ano_fabricacao IS NOT NULL
+    GROUP BY ano_fabricacao
+    ORDER BY total DESC, ano_fabricacao DESC
+    LIMIT 1
+    '''
+    return query_df(con, sql, [competencia])
+
+
+def top_model_national_snapshot(con, competencia: str):
+    sql = '''
+    SELECT
+      marca_modelo,
+      SUM(qtd_veiculos) AS total
+    FROM frota_harley
+    WHERE competencia = ?
+    GROUP BY marca_modelo
+    ORDER BY total DESC, marca_modelo
+    LIMIT 1
+    '''
+    return query_df(con, sql, [competencia])
+
+
+def registrations_macro_monthly(con):
+    sql = '''
+    WITH months AS (
+      SELECT
+        competencia,
+        LAG(competencia) OVER (ORDER BY competencia) AS prev_comp
+      FROM (
+        SELECT DISTINCT competencia
+        FROM frota_harley
+      )
+    ),
+    model_stock AS (
+      SELECT
+        competencia,
+        marca_modelo,
+        SUM(qtd_veiculos) AS estoque
+      FROM frota_harley
+      GROUP BY competencia, marca_modelo
+    ),
+    current_model AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.marca_modelo,
+        s.estoque AS estoque_atual
+      FROM months m
+      LEFT JOIN model_stock s ON s.competencia = m.competencia
+    ),
+    previous_model AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.marca_modelo,
+        s.estoque AS estoque_prev
+      FROM months m
+      LEFT JOIN model_stock s ON s.competencia = m.prev_comp
+    ),
+    model_pairs AS (
+      SELECT
+        COALESCE(c.competencia, p.competencia) AS competencia,
+        COALESCE(c.prev_comp, p.prev_comp) AS prev_comp,
+        COALESCE(c.marca_modelo, p.marca_modelo) AS marca_modelo,
+        COALESCE(c.estoque_atual, 0) AS estoque_atual,
+        COALESCE(p.estoque_prev, 0) AS estoque_prev
+      FROM current_model c
+      FULL OUTER JOIN previous_model p
+        ON c.competencia = p.competencia
+       AND c.marca_modelo = p.marca_modelo
+    ),
+    total_harley AS (
+      SELECT
+        competencia,
+        SUM(
+          CASE
+            WHEN prev_comp IS NULL THEN 0
+            ELSE GREATEST(estoque_atual - estoque_prev, 0)
+          END
+        ) AS total_harley
+      FROM model_pairs
+      GROUP BY competencia
+    ),
+    my_stock AS (
+      SELECT
+        competencia,
+        ano_fabricacao,
+        marca_modelo,
+        SUM(qtd_veiculos) AS estoque
+      FROM frota_harley
+      WHERE ano_fabricacao IS NOT NULL
+      GROUP BY competencia, ano_fabricacao, marca_modelo
+    ),
+    current_my AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.ano_fabricacao,
+        s.marca_modelo,
+        s.estoque AS estoque_atual
+      FROM months m
+      LEFT JOIN my_stock s ON s.competencia = m.competencia
+    ),
+    previous_my AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.ano_fabricacao,
+        s.marca_modelo,
+        s.estoque AS estoque_prev
+      FROM months m
+      LEFT JOIN my_stock s ON s.competencia = m.prev_comp
+    ),
+    my_pairs AS (
+      SELECT
+        COALESCE(c.competencia, p.competencia) AS competencia,
+        COALESCE(c.prev_comp, p.prev_comp) AS prev_comp,
+        COALESCE(c.ano_fabricacao, p.ano_fabricacao) AS ano_fabricacao,
+        COALESCE(c.marca_modelo, p.marca_modelo) AS marca_modelo,
+        COALESCE(c.estoque_atual, 0) AS estoque_atual,
+        COALESCE(p.estoque_prev, 0) AS estoque_prev
+      FROM current_my c
+      FULL OUTER JOIN previous_my p
+        ON c.competencia = p.competencia
+       AND c.ano_fabricacao = p.ano_fabricacao
+       AND c.marca_modelo = p.marca_modelo
+    ),
+    raw_positive AS (
+      SELECT
+        competencia,
+        prev_comp,
+        ano_fabricacao,
+        marca_modelo,
+        CASE
+          WHEN prev_comp IS NULL THEN 0
+          ELSE GREATEST(estoque_atual - estoque_prev, 0)
+        END AS raw_positive
+      FROM my_pairs
+    ),
+    null_stock AS (
+      SELECT
+        competencia,
+        marca_modelo,
+        SUM(qtd_veiculos) AS estoque
+      FROM frota_harley
+      WHERE ano_fabricacao IS NULL
+      GROUP BY competencia, marca_modelo
+    ),
+    current_null AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.marca_modelo,
+        s.estoque AS estoque_atual
+      FROM months m
+      LEFT JOIN null_stock s ON s.competencia = m.competencia
+    ),
+    previous_null AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.marca_modelo,
+        s.estoque AS estoque_prev
+      FROM months m
+      LEFT JOIN null_stock s ON s.competencia = m.prev_comp
+    ),
+    null_pairs AS (
+      SELECT
+        COALESCE(c.competencia, p.competencia) AS competencia,
+        COALESCE(c.prev_comp, p.prev_comp) AS prev_comp,
+        COALESCE(c.marca_modelo, p.marca_modelo) AS marca_modelo,
+        COALESCE(c.estoque_atual, 0) AS estoque_atual,
+        COALESCE(p.estoque_prev, 0) AS estoque_prev
+      FROM current_null c
+      FULL OUTER JOIN previous_null p
+        ON c.competencia = p.competencia
+       AND c.marca_modelo = p.marca_modelo
+    ),
+    null_reclassification AS (
+      SELECT
+        competencia,
+        marca_modelo,
+        CASE
+          WHEN prev_comp IS NULL THEN 0
+          ELSE GREATEST(estoque_prev - estoque_atual, 0)
+        END AS null_decrease
+      FROM null_pairs
+    ),
+    positive_by_model AS (
+      SELECT
+        competencia,
+        marca_modelo,
+        SUM(raw_positive) AS total_positive
+      FROM raw_positive
+      GROUP BY competencia, marca_modelo
+    ),
+    adjusted_rows AS (
+      SELECT
+        p.competencia,
+        p.ano_fabricacao,
+        p.marca_modelo,
+        CASE
+          WHEN p.raw_positive <= 0 THEN 0
+          WHEN COALESCE(pb.total_positive, 0) <= 0 THEN 0
+          ELSE p.raw_positive
+            * GREATEST(COALESCE(pb.total_positive, 0) - COALESCE(n.null_decrease, 0), 0)
+            / pb.total_positive
+        END AS emplacamentos
+      FROM raw_positive p
+      LEFT JOIN positive_by_model pb
+        ON pb.competencia = p.competencia
+       AND pb.marca_modelo = p.marca_modelo
+      LEFT JOIN null_reclassification n
+        ON n.competencia = p.competencia
+       AND n.marca_modelo = p.marca_modelo
+    ),
+    adjusted_by_year AS (
+      SELECT
+        competencia,
+        ano_fabricacao,
+        SUM(emplacamentos) AS emplacamentos
+      FROM adjusted_rows
+      GROUP BY competencia, ano_fabricacao
+    )
+    SELECT
+      a.competencia,
+      a.ano_fabricacao,
+      a.emplacamentos,
+      t.total_harley
+    FROM adjusted_by_year a
+    LEFT JOIN total_harley t ON t.competencia = a.competencia
+    ORDER BY a.competencia, a.ano_fabricacao
+    '''
+    return query_df(con, sql)
 
 
 def sem_info_my_monthly_series(con, ano_modelo: int):

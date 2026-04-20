@@ -2,13 +2,29 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 from app.db import connect
+from app.glossary import enrich_models
 from app import queries
 
 HARLEY_ORANGE = "#FF6A13"
+MONTH_LABELS_PT = {
+    1: "jan",
+    2: "fev",
+    3: "mar",
+    4: "abr",
+    5: "mai",
+    6: "jun",
+    7: "jul",
+    8: "ago",
+    9: "set",
+    10: "out",
+    11: "nov",
+    12: "dez",
+}
 
 
 DETAIL_PAGE_PATH = "pages/modelo_detalhe.py"
@@ -49,6 +65,11 @@ def get_model_share_by_city(db_path: str, modelo: str, competencia: str):
     return queries.model_share_by_city(con, modelo=modelo, competencia=competencia)
 
 
+def format_reference_month(value: str | pd.Timestamp) -> str:
+    ts = pd.Timestamp(value)
+    return f"{MONTH_LABELS_PT[int(ts.month)]}/{str(ts.year)[-2:]}"
+
+
 def set_model_detail_context(modelo: str, db_path: str, competencia: str, ano_fabricacao: int):
     st.session_state["model_detail_modelo"] = modelo
     st.session_state["model_detail_db_path"] = db_path
@@ -63,8 +84,13 @@ def render_matrix_detail_selector(
     ano_fabricacao: int,
     key: str,
 ):
+    display_df = matrix_df.copy()
+    hidden_cols = [column for column in ["marca_modelo", "nome_exibicao"] if column in display_df.columns]
+    if hidden_cols:
+        display_df = display_df.drop(columns=hidden_cols)
+
     event = st.dataframe(
-        matrix_df,
+        display_df,
         use_container_width=True,
         hide_index=True,
         height=560,
@@ -78,7 +104,8 @@ def render_matrix_detail_selector(
         st.caption("Selecione uma linha e clique em `Exibir detalhe` para abrir a página do modelo.")
         return
 
-    selected_model = matrix_df.iloc[selection[0]]["marca_modelo"]
+    source_col = "codigo_modelo" if "codigo_modelo" in matrix_df.columns else "marca_modelo"
+    selected_model = matrix_df.iloc[selection[0]][source_col]
     button_label = f"Exibir detalhe: {selected_model}"
     if st.button(button_label, key=f"{key}_detail_button"):
         set_model_detail_context(
@@ -110,7 +137,13 @@ def render_model_detail_page():
     if st.button("Voltar ao dashboard"):
         st.switch_page("streamlit_app.py")
 
-    st.caption(f"Modelo: {modelo} | Competência de corte: {competencia} | MY: {ano_fabricacao or '-'}")
+    reference_month = format_reference_month(str(competencia))
+    glossary_df = enrich_models(pd.DataFrame({"marca_modelo": [modelo]}))
+    friendly_name = glossary_df.iloc[0]["nome_amigavel"]
+    if str(friendly_name).strip():
+        st.caption(f"Modelo: {modelo} | Nome amigável: {friendly_name} | Mês de referência: {reference_month} | MY: {ano_fabricacao or '-'}")
+    else:
+        st.caption(f"Modelo: {modelo} | Mês de referência: {reference_month} | MY: {ano_fabricacao or '-'}")
 
     snapshot_df = get_model_snapshot(str(db_path), str(modelo), str(competencia))
     series_df = get_model_series(str(db_path), str(modelo))
@@ -119,14 +152,14 @@ def render_model_detail_page():
     city_df = get_model_share_by_city(str(db_path), str(modelo), str(competencia))
 
     if snapshot_df.empty:
-        st.warning("Sem dados para este modelo na competência selecionada.")
+        st.warning("Sem dados para este modelo no mês selecionado.")
         st.stop()
 
     row = snapshot_df.iloc[0]
     c1, c2, c3 = st.columns(3)
-    c1.metric("Frota na competência", f"{int(row['estoque']):,}".replace(",", "."))
+    c1.metric("Frota no mês", f"{int(row['estoque']):,}".replace(",", "."))
     c2.metric("Emplacamentos do mês", f"{max(int(row['delta']), 0):,}".replace(",", "."))
-    c3.metric("Competência", str(row["competencia"]))
+    c3.metric("Mês de referência", format_reference_month(str(row["competencia"])))
 
     st.divider()
 
@@ -140,6 +173,7 @@ def render_model_detail_page():
             markers=True,
             title=f"Frota acumulada | {modelo}",
         )
+        fig_series.update_layout(xaxis_title="Mês", yaxis_title="Unidades")
         st.plotly_chart(fig_series, use_container_width=True)
     with col2:
         st.subheader("Série de emplacamentos")
@@ -150,13 +184,14 @@ def render_model_detail_page():
             markers=True,
             title=f"Emplacamentos mensais | {modelo}",
         )
+        fig_entries.update_layout(xaxis_title="Mês", yaxis_title="Unidades")
         st.plotly_chart(fig_entries, use_container_width=True)
 
     st.divider()
 
     col3, col4 = st.columns((1, 1))
     with col3:
-        st.subheader(f"Distribuição por UF | {competencia}")
+        st.subheader(f"Distribuição por UF | {reference_month}")
         st.dataframe(uf_df, use_container_width=True, hide_index=True)
     with col4:
         fig_uf = px.bar(
@@ -169,5 +204,5 @@ def render_model_detail_page():
         st.plotly_chart(fig_uf, use_container_width=True)
 
     st.divider()
-    st.subheader(f"Top municípios | {competencia}")
+    st.subheader(f"Top municípios | {reference_month}")
     st.dataframe(city_df, use_container_width=True, hide_index=True)
