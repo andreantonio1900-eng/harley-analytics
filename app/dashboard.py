@@ -28,6 +28,7 @@ MONTH_LABELS_PT = {
     11: "nov",
     12: "dez",
 }
+LOGO_PATH = Path(__file__).resolve().parent / "assets" / "harley_davidson_logo.jpg"
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,12 @@ def get_registrations_macro_monthly(db_path: str):
 
 
 @st.cache_data
+def get_search_model_instances(db_path: str, pattern: str):
+    con = get_connection(db_path)
+    return queries.search_model_instances(con, pattern=pattern)
+
+
+@st.cache_data
 def get_sem_info_my_monthly_series(db_path: str, ano_fabricacao: int):
     con = get_connection(db_path)
     return queries.sem_info_my_monthly_series(con, ano_modelo=ano_fabricacao)
@@ -128,20 +135,52 @@ def get_models_by_year(db_path: str, ano_fabricacao: int, competencia: str):
 
 
 @st.cache_data
-def get_model_year_monthly_matrix(db_path: str, ano_fabricacao: int, competencia: str):
+def get_model_year_monthly_matrix(db_path: str, anos_fabricacao: tuple[int, ...], competencia: str):
     con = get_connection(db_path)
-    return queries.model_year_monthly_matrix(con, ano=ano_fabricacao, competencia=competencia)
+    return queries.model_year_monthly_matrix(con, anos=list(anos_fabricacao), competencia=competencia)
 
 
 @st.cache_data
-def get_model_year_registrations_matrix(db_path: str, ano_fabricacao: int, competencia: str):
+def get_model_year_registrations_matrix(db_path: str, anos_fabricacao: tuple[int, ...], competencia: str):
     con = get_connection(db_path)
-    return queries.model_year_registrations_matrix(con, ano=ano_fabricacao, competencia=competencia)
+    return queries.model_year_registrations_matrix(con, anos=list(anos_fabricacao), competencia=competencia)
 
 
 def format_reference_month(value: str | pd.Timestamp) -> str:
     ts = pd.Timestamp(value)
     return f"{MONTH_LABELS_PT[int(ts.month)]}/{str(ts.year)[-2:]}"
+
+
+def get_valid_years_for_reference(db_path: str, competencia: str) -> list[int]:
+    reference_year = pd.Timestamp(competencia).year
+    return [year for year in get_years(db_path) if year <= reference_year]
+
+
+def format_year_selection_label(years: list[int]) -> str:
+    if not years:
+        return "Sem MY"
+    if len(years) == 1:
+        return f"MY {years[0]}"
+    return "MYs " + ", ".join(str(year) for year in years)
+
+
+def render_header():
+    col_logo, col_copy = st.columns((1, 3))
+    with col_logo:
+        if LOGO_PATH.exists():
+            st.image(str(LOGO_PATH), use_container_width=True)
+    with col_copy:
+        st.markdown(
+            """
+            <div style="padding-top: 1.1rem;">
+                <h1 style="margin: 0; font-size: 2.3rem; line-height: 1;">Harley Analytics</h1>
+                <p style="margin: 0.45rem 0 0 0; color: #B8BDC7; font-size: 1rem;">
+                    Visão macro da frota Harley-Davidson
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 def render_sidebar(default_db_path: str) -> DashboardFilters:
@@ -557,7 +596,10 @@ def render_registrations_macro_view(db_path: str, competencia: str):
 
 
 def render_sem_info_view(db_path: str, competencia: str):
-    years = get_years(db_path)
+    years = get_valid_years_for_reference(db_path, competencia)
+    if not years:
+        st.info("Não há anos-modelo válidos para o mês de referência selecionado.")
+        return
     ano_fabricacao = st.selectbox(
         "Ano-modelo do dealer inventory",
         options=years,
@@ -766,60 +808,211 @@ def render_matrix_line_chart(matrix_df, title: str, y_axis_title: str, key: str)
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_search_explorer_view(db_path: str, competencia: str):
+    st.subheader("Busca livre")
+    st.caption("Como ler: digite uma string para explorar famílias, códigos e variações de modelo. Depois refine por ano-modelo, UF e município, e escolha como quer quebrar a série histórica.")
+
+    search_term = st.text_input(
+        "Buscar por string",
+        value="",
+        placeholder="Ex.: 883, FLHX, Road Glide, Pan America",
+        key="free_search_term",
+    ).strip()
+    if len(search_term) < 2:
+        st.info("Digite pelo menos 2 caracteres para buscar na base.")
+        return
+
+    raw_df = enrich_models(get_search_model_instances(db_path, f"%{search_term}%"))
+    if raw_df.empty:
+        st.info("Nenhuma instância encontrada para essa busca.")
+        return
+
+    raw_df["competencia"] = pd.to_datetime(raw_df["competencia"])
+    raw_df = raw_df[raw_df["competencia"] <= pd.Timestamp(competencia)].copy()
+    if raw_df.empty:
+        st.info("Nenhum resultado encontrado até o mês de referência selecionado.")
+        return
+
+    my_options = sorted(
+        [int(value) for value in raw_df["ano_fabricacao"].dropna().unique().tolist() if int(value) <= pd.Timestamp(competencia).year]
+    )
+    uf_options = sorted(raw_df["uf"].dropna().astype(str).unique().tolist())
+    city_options = sorted(raw_df["municipio"].dropna().astype(str).unique().tolist())
+
+    f1, f2, f3 = st.columns((1, 1, 1))
+    with f1:
+        selected_years = st.multiselect(
+            "Filtrar por MY",
+            options=my_options,
+            default=[],
+            format_func=lambda year: f"MY {year}",
+            key="free_search_my_filter",
+        )
+    with f2:
+        selected_ufs = st.multiselect(
+            "Filtrar por UF",
+            options=uf_options,
+            default=[],
+            key="free_search_uf_filter",
+        )
+    with f3:
+        selected_cities = st.multiselect(
+            "Filtrar por município",
+            options=city_options,
+            default=[],
+            key="free_search_city_filter",
+        )
+
+    filtered_df = raw_df.copy()
+    if selected_years:
+        filtered_df = filtered_df[filtered_df["ano_fabricacao"].isin(selected_years)]
+    if selected_ufs:
+        filtered_df = filtered_df[filtered_df["uf"].isin(selected_ufs)]
+    if selected_cities:
+        filtered_df = filtered_df[filtered_df["municipio"].isin(selected_cities)]
+
+    if filtered_df.empty:
+        st.info("Os filtros zeraram o recorte. Ajuste os toggles para continuar.")
+        return
+
+    snapshot_df = (
+        filtered_df[filtered_df["competencia"] == pd.Timestamp(competencia)]
+        .groupby(["codigo_modelo", "nome_amigavel", "nome_exibicao", "ano_fabricacao"], as_index=False)["qtd_veiculos"]
+        .sum()
+        .sort_values(["qtd_veiculos", "codigo_modelo"], ascending=[False, True])
+    )
+
+    st.dataframe(
+        snapshot_df[["codigo_modelo", "nome_amigavel", "ano_fabricacao", "qtd_veiculos"]],
+        use_container_width=True,
+        hide_index=True,
+        height=340,
+        column_config={
+            "codigo_modelo": "Codigo",
+            "nome_amigavel": "Nome amigavel",
+            "ano_fabricacao": "MY",
+            "qtd_veiculos": "Unidades",
+        },
+    )
+
+    segment = st.selectbox(
+        "Segmentar série por",
+        options=["Consolidado", "Modelo", "Ano-modelo", "UF", "Município"],
+        index=0,
+        key="free_search_segment",
+    )
+
+    if segment == "Consolidado":
+        chart_df = (
+            filtered_df.groupby("competencia", as_index=False)["qtd_veiculos"]
+            .sum()
+            .rename(columns={"qtd_veiculos": "valor"})
+        )
+        chart_df["serie"] = f"Busca: {search_term}"
+    else:
+        segment_map = {
+            "Modelo": "nome_exibicao",
+            "Ano-modelo": "ano_fabricacao",
+            "UF": "uf",
+            "Município": "municipio",
+        }
+        col = segment_map[segment]
+        chart_df = (
+            filtered_df.groupby(["competencia", col], as_index=False)["qtd_veiculos"]
+            .sum()
+            .rename(columns={"qtd_veiculos": "valor", col: "serie"})
+        )
+        chart_df["serie"] = chart_df["serie"].astype(str)
+
+    chart_df["competencia_label"] = chart_df["competencia"].dt.strftime("%b/%y")
+    fig = px.line(
+        chart_df,
+        x="competencia_label",
+        y="valor",
+        color="serie",
+        markers=True,
+        title=f"Busca livre | {search_term}",
+    )
+    fig.update_layout(
+        xaxis_title="Mês",
+        yaxis_title="Unidades",
+        legend_title_text="Série",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def render_models_by_year(db_path: str, competencia: str):
-    years = get_years(db_path)
-    ano_fabricacao = st.selectbox(
-        "Ano-modelo da matriz",
+    years = get_valid_years_for_reference(db_path, competencia)
+    if not years:
+        st.info("Não há anos-modelo válidos para o mês de referência selecionado.")
+        return
+    selected_years = st.multiselect(
+        "Anos-modelo da matriz",
         options=years,
-        index=len(years) - 1,
+        default=[years[-1]],
         key="models_by_year_selector",
     )
-    matrix_df = enrich_models(get_model_year_monthly_matrix(db_path, ano_fabricacao, competencia))
-    registrations_df = enrich_models(get_model_year_registrations_matrix(db_path, ano_fabricacao, competencia))
+    if not selected_years:
+        st.info("Selecione pelo menos um ano-modelo para montar a matriz.")
+        return
+
+    selected_years = sorted(selected_years)
+    year_label = format_year_selection_label(selected_years)
+    matrix_df = enrich_models(get_model_year_monthly_matrix(db_path, tuple(selected_years), competencia))
+    registrations_df = enrich_models(get_model_year_registrations_matrix(db_path, tuple(selected_years), competencia))
     reference_month = format_reference_month(competencia)
 
-    st.subheader(f"Modelos | MY {ano_fabricacao}")
+    st.subheader(f"Modelos | {year_label}")
     st.caption(f"Mês de referência: {reference_month}")
     st.caption("Como ler: aqui o foco sai do macro e entra no mix de produto. Use as abas para alternar entre estoque acumulado e emplacamentos mensais.")
 
     tab_frota, tab_emplacamentos = st.tabs(["Frota", "Emplacamentos"])
 
     with tab_frota:
-        st.caption("Como ler: cada linha é um modelo. As colunas mostram a evolução do estoque ao longo do ano. Selecione uma linha para abrir o detalhe.")
-        render_matrix_detail_selector(
-            matrix_df,
-            db_path=db_path,
-            competencia=competencia,
-            ano_fabricacao=ano_fabricacao,
-            key="fleet_matrix",
-        )
+        st.caption("Como ler: cada linha é um modelo. As colunas mostram a evolução do estoque ao longo do ano. Quando houver um único MY selecionado, você também pode abrir o detalhe.")
+        if len(selected_years) == 1:
+            render_matrix_detail_selector(
+                matrix_df,
+                db_path=db_path,
+                competencia=competencia,
+                ano_fabricacao=selected_years[0],
+                key="fleet_matrix",
+            )
+        else:
+            st.caption("Detalhe do modelo desabilitado na visão consolidada de múltiplos anos-modelo.")
+            display_df = matrix_df.drop(columns=[column for column in ["marca_modelo", "nome_exibicao"] if column in matrix_df.columns])
+            st.dataframe(display_df, use_container_width=True, hide_index=True, height=560)
         render_matrix_line_chart(
             matrix_df,
-            title=f"Evolução da frota | MY {ano_fabricacao}",
+            title=f"Evolução da frota | {year_label}",
             y_axis_title="Frota",
             key="fleet_matrix_chart",
         )
 
     with tab_emplacamentos:
         st.caption("Como ler: aqui cada célula representa entrada do mês, não estoque. É a melhor visão para entender ritmo de emplacamento por modelo.")
-        render_matrix_detail_selector(
-            registrations_df,
-            db_path=db_path,
-            competencia=competencia,
-            ano_fabricacao=ano_fabricacao,
-            key="registrations_matrix",
-        )
+        if len(selected_years) == 1:
+            render_matrix_detail_selector(
+                registrations_df,
+                db_path=db_path,
+                competencia=competencia,
+                ano_fabricacao=selected_years[0],
+                key="registrations_matrix",
+            )
+        else:
+            st.caption("Detalhe do modelo desabilitado na visão consolidada de múltiplos anos-modelo.")
+            display_df = registrations_df.drop(columns=[column for column in ["marca_modelo", "nome_exibicao"] if column in registrations_df.columns])
+            st.dataframe(display_df, use_container_width=True, hide_index=True, height=560)
         render_matrix_line_chart(
             registrations_df,
-            title=f"Emplacamentos mensais | MY {ano_fabricacao}",
+            title=f"Emplacamentos mensais | {year_label}",
             y_axis_title="Emplacamentos",
             key="registrations_matrix_chart",
         )
 
 
 def render_dashboard(default_db_path: str):
-    st.title("Harley Analytics")
-    st.caption("Visão macro da frota Harley-Davidson")
+    render_header()
 
     filters = render_sidebar(default_db_path)
 
@@ -832,5 +1025,7 @@ def render_dashboard(default_db_path: str):
     render_top_models_national(filters.db_path, filters.competencia)
     st.divider()
     render_sem_info_view(filters.db_path, filters.competencia)
+    st.divider()
+    render_search_explorer_view(filters.db_path, filters.competencia)
     st.divider()
     render_models_by_year(filters.db_path, filters.competencia)

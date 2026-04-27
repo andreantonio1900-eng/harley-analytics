@@ -106,6 +106,22 @@ def top_model_national_snapshot(con, competencia: str):
     return query_df(con, sql, [competencia])
 
 
+def search_model_instances(con, pattern: str):
+    sql = '''
+    SELECT
+      competencia,
+      uf,
+      municipio,
+      marca_modelo,
+      ano_fabricacao,
+      qtd_veiculos
+    FROM frota_harley
+    WHERE upper(marca_modelo) LIKE upper(?)
+    ORDER BY competencia, marca_modelo, uf, municipio, ano_fabricacao
+    '''
+    return query_df(con, sql, [pattern])
+
+
 def registrations_macro_monthly(con):
     sql = '''
     WITH months AS (
@@ -434,16 +450,20 @@ def list_models_by_year(con, ano: int, competencia: str | None = None):
     return query_df(con, sql, params)
 
 
-def model_year_monthly_matrix(con, ano: int, competencia: str):
+def model_year_monthly_matrix(con, anos: list[int], competencia: str):
+    if not anos:
+        return pd.DataFrame(columns=["marca_modelo"])
+
     competencia_ts = pd.Timestamp(competencia)
     ano_competencia = int(competencia_ts.year)
     mes_corte = int(competencia_ts.month)
+    year_placeholders = ", ".join(["?"] * len(anos))
 
-    sql = '''
+    sql = f'''
     WITH modelos AS (
       SELECT DISTINCT marca_modelo
       FROM frota_harley
-      WHERE ano_fabricacao = ?
+      WHERE ano_fabricacao IN ({year_placeholders})
     ),
     totais AS (
       SELECT
@@ -451,7 +471,7 @@ def model_year_monthly_matrix(con, ano: int, competencia: str):
         EXTRACT(month FROM competencia) AS mes,
         SUM(qtd_veiculos) AS total
       FROM frota_harley
-      WHERE ano_fabricacao = ?
+      WHERE ano_fabricacao IN ({year_placeholders})
         AND EXTRACT(year FROM competencia) = ?
         AND competencia <= ?
       GROUP BY marca_modelo, mes
@@ -463,7 +483,8 @@ def model_year_monthly_matrix(con, ano: int, competencia: str):
     FROM modelos m
     LEFT JOIN totais t ON t.marca_modelo = m.marca_modelo
     '''
-    df = query_df(con, sql, [ano, ano, ano_competencia, competencia])
+    params = [*anos, *anos, ano_competencia, competencia]
+    df = query_df(con, sql, params)
 
     month_names = {
         1: "jan",
@@ -503,16 +524,20 @@ def model_year_monthly_matrix(con, ano: int, competencia: str):
     return base
 
 
-def model_year_registrations_matrix(con, ano: int, competencia: str):
+def model_year_registrations_matrix(con, anos: list[int], competencia: str):
+    if not anos:
+        return pd.DataFrame(columns=["marca_modelo"])
+
     competencia_ts = pd.Timestamp(competencia)
     ano_competencia = int(competencia_ts.year)
     mes_corte = int(competencia_ts.month)
+    year_placeholders = ", ".join(["?"] * len(anos))
 
-    sql = '''
+    sql = f'''
     WITH modelos AS (
       SELECT DISTINCT marca_modelo
       FROM frota_harley
-      WHERE ano_fabricacao = ?
+      WHERE ano_fabricacao IN ({year_placeholders})
     ),
     serie AS (
       SELECT
@@ -520,7 +545,7 @@ def model_year_registrations_matrix(con, ano: int, competencia: str):
         competencia,
         SUM(qtd_veiculos) AS estoque
       FROM frota_harley
-      WHERE ano_fabricacao = ?
+      WHERE ano_fabricacao IN ({year_placeholders})
         AND competencia <= ?
       GROUP BY marca_modelo, competencia
     ),
@@ -550,7 +575,8 @@ def model_year_registrations_matrix(con, ano: int, competencia: str):
     FROM modelos m
     LEFT JOIN totais t ON t.marca_modelo = m.marca_modelo
     '''
-    df = query_df(con, sql, [ano, ano, competencia, ano_competencia])
+    params = [*anos, *anos, competencia, ano_competencia]
+    df = query_df(con, sql, params)
 
     month_names = {
         1: "jan",
