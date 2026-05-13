@@ -92,6 +92,20 @@ def top_model_year_national(con, competencia: str):
     return query_df(con, sql, [competencia])
 
 
+def model_year_snapshot_distribution(con, competencia: str):
+    sql = '''
+    SELECT
+      ano_fabricacao,
+      SUM(qtd_veiculos) AS total
+    FROM frota_harley
+    WHERE competencia = ?
+      AND ano_fabricacao IS NOT NULL
+    GROUP BY ano_fabricacao
+    ORDER BY total DESC, ano_fabricacao DESC
+    '''
+    return query_df(con, sql, [competencia])
+
+
 def top_model_national_snapshot(con, competencia: str):
     sql = '''
     SELECT
@@ -104,6 +118,208 @@ def top_model_national_snapshot(con, competencia: str):
     LIMIT 1
     '''
     return query_df(con, sql, [competencia])
+
+
+def current_model_snapshot(con, competencia: str):
+    sql = '''
+    SELECT
+      marca_modelo,
+      SUM(qtd_veiculos) AS total
+    FROM frota_harley
+    WHERE competencia = ?
+    GROUP BY marca_modelo
+    ORDER BY total DESC, marca_modelo
+    '''
+    return query_df(con, sql, [competencia])
+
+
+def top_cities_national(con, competencia: str, limit: int = 20):
+    sql = '''
+    SELECT
+      municipio,
+      uf,
+      SUM(qtd_veiculos) AS total
+    FROM frota_harley
+    WHERE competencia = ?
+    GROUP BY municipio, uf
+    ORDER BY total DESC, municipio, uf
+    LIMIT ?
+    '''
+    return query_df(con, sql, [competencia, limit])
+
+
+def city_concentration_snapshot(con, competencia: str, limit: int = 20):
+    sql = '''
+    WITH city_base AS (
+      SELECT
+        municipio,
+        uf,
+        SUM(qtd_veiculos) AS total
+      FROM frota_harley
+      WHERE competencia = ?
+      GROUP BY municipio, uf
+    ),
+    uf_base AS (
+      SELECT
+        uf,
+        SUM(total) AS total_uf
+      FROM city_base
+      GROUP BY uf
+    ),
+    brasil AS (
+      SELECT SUM(total) AS total_brasil
+      FROM city_base
+    )
+    SELECT
+      c.municipio,
+      c.uf,
+      c.total,
+      u.total_uf,
+      ROUND(100.0 * c.total / NULLIF(u.total_uf, 0), 2) AS share_uf_pct,
+      ROUND(100.0 * c.total / NULLIF(b.total_brasil, 0), 2) AS share_brasil_pct
+    FROM city_base c
+    LEFT JOIN uf_base u ON u.uf = c.uf
+    CROSS JOIN brasil b
+    ORDER BY c.total DESC, c.municipio, c.uf
+    LIMIT ?
+    '''
+    return query_df(con, sql, [competencia, limit])
+
+
+def annual_sales_totals(con):
+    sql = '''
+    WITH months AS (
+      SELECT
+        competencia,
+        LAG(competencia) OVER (ORDER BY competencia) AS prev_comp
+      FROM (
+        SELECT DISTINCT competencia
+        FROM frota_harley
+      )
+    ),
+    model_stock AS (
+      SELECT
+        competencia,
+        marca_modelo,
+        SUM(qtd_veiculos) AS estoque
+      FROM frota_harley
+      GROUP BY competencia, marca_modelo
+    ),
+    current_model AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.marca_modelo,
+        s.estoque AS estoque_atual
+      FROM months m
+      LEFT JOIN model_stock s ON s.competencia = m.competencia
+    ),
+    previous_model AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.marca_modelo,
+        s.estoque AS estoque_prev
+      FROM months m
+      LEFT JOIN model_stock s ON s.competencia = m.prev_comp
+    ),
+    model_pairs AS (
+      SELECT
+        COALESCE(c.competencia, p.competencia) AS competencia,
+        COALESCE(c.prev_comp, p.prev_comp) AS prev_comp,
+        COALESCE(c.marca_modelo, p.marca_modelo) AS marca_modelo,
+        COALESCE(c.estoque_atual, 0) AS estoque_atual,
+        COALESCE(p.estoque_prev, 0) AS estoque_prev
+      FROM current_model c
+      FULL OUTER JOIN previous_model p
+        ON c.competencia = p.competencia
+       AND c.marca_modelo = p.marca_modelo
+    ),
+    monthly_sales AS (
+      SELECT
+        competencia,
+        SUM(
+          CASE
+            WHEN prev_comp IS NULL THEN 0
+            ELSE GREATEST(estoque_atual - estoque_prev, 0)
+          END
+        ) AS total_harley
+      FROM model_pairs
+      GROUP BY competencia
+    )
+    SELECT
+      EXTRACT(year FROM competencia) AS ano,
+      COUNT(*) AS meses_observados,
+      SUM(total_harley) AS vendas_total
+    FROM monthly_sales
+    GROUP BY ano
+    ORDER BY ano
+    '''
+    return query_df(con, sql)
+
+
+def model_base_builder_ranking(con):
+    sql = '''
+    WITH months AS (
+      SELECT
+        competencia,
+        LAG(competencia) OVER (ORDER BY competencia) AS prev_comp
+      FROM (
+        SELECT DISTINCT competencia
+        FROM frota_harley
+      )
+    ),
+    model_stock AS (
+      SELECT
+        competencia,
+        marca_modelo,
+        SUM(qtd_veiculos) AS estoque
+      FROM frota_harley
+      GROUP BY competencia, marca_modelo
+    ),
+    current_model AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.marca_modelo,
+        s.estoque AS estoque_atual
+      FROM months m
+      LEFT JOIN model_stock s ON s.competencia = m.competencia
+    ),
+    previous_model AS (
+      SELECT
+        m.competencia,
+        m.prev_comp,
+        s.marca_modelo,
+        s.estoque AS estoque_prev
+      FROM months m
+      LEFT JOIN model_stock s ON s.competencia = m.prev_comp
+    ),
+    model_pairs AS (
+      SELECT
+        COALESCE(c.competencia, p.competencia) AS competencia,
+        COALESCE(c.prev_comp, p.prev_comp) AS prev_comp,
+        COALESCE(c.marca_modelo, p.marca_modelo) AS marca_modelo,
+        COALESCE(c.estoque_atual, 0) AS estoque_atual,
+        COALESCE(p.estoque_prev, 0) AS estoque_prev
+      FROM current_model c
+      FULL OUTER JOIN previous_model p
+        ON c.competencia = p.competencia
+       AND c.marca_modelo = p.marca_modelo
+    )
+    SELECT
+      marca_modelo,
+      SUM(
+        CASE
+          WHEN prev_comp IS NULL THEN 0
+          ELSE GREATEST(estoque_atual - estoque_prev, 0)
+        END
+      ) AS vendas_proxy_total
+    FROM model_pairs
+    GROUP BY marca_modelo
+    ORDER BY vendas_proxy_total DESC, marca_modelo
+    '''
+    return query_df(con, sql)
 
 
 def search_model_instances(con, pattern: str):
