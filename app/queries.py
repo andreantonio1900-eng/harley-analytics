@@ -832,6 +832,56 @@ def model_year_registrations_matrix(con, anos: list[int], competencia: str):
     return base
 
 
+def model_year_territory_snapshot(con, anos: list[int], competencia: str, granularity: str = "uf"):
+    if not anos:
+        return pd.DataFrame()
+
+    competencia_ts = pd.Timestamp(competencia)
+    year_placeholders = ", ".join(["?"] * len(anos))
+    dims = ["uf"] if granularity == "uf" else ["uf", "municipio"]
+    select_dims = ", ".join(dims)
+    group_dims = ", ".join(dims)
+    order_dims = ", ".join(dims)
+
+    sql = f'''
+    WITH current_base AS (
+      SELECT
+        {select_dims},
+        SUM(qtd_veiculos) AS total_atual
+      FROM frota_harley
+      WHERE competencia = ?
+        AND ano_fabricacao IN ({year_placeholders})
+      GROUP BY {group_dims}
+    ),
+    previous_base AS (
+      SELECT
+        {select_dims},
+        SUM(qtd_veiculos) AS total_anterior
+      FROM frota_harley
+      WHERE competencia = (
+        SELECT MAX(competencia)
+        FROM frota_harley
+        WHERE competencia < ?
+      )
+        AND ano_fabricacao IN ({year_placeholders})
+      GROUP BY {group_dims}
+    )
+    SELECT
+      COALESCE(c.uf, p.uf) AS uf,
+      {("COALESCE(c.municipio, p.municipio) AS municipio," if granularity != "uf" else "")}
+      COALESCE(c.total_atual, 0) AS total_atual,
+      COALESCE(p.total_anterior, 0) AS total_anterior,
+      COALESCE(c.total_atual, 0) - COALESCE(p.total_anterior, 0) AS delta_liquido,
+      GREATEST(COALESCE(c.total_atual, 0) - COALESCE(p.total_anterior, 0), 0) AS ganho_mensal
+    FROM current_base c
+    FULL OUTER JOIN previous_base p
+      ON {' AND '.join([f'c.{dim} = p.{dim}' for dim in dims])}
+    ORDER BY ganho_mensal DESC, total_atual DESC, {order_dims}
+    '''
+    params = [competencia, *anos, competencia, *anos]
+    return query_df(con, sql, params)
+
+
 def model_snapshot(con, modelo: str, competencia: str):
     sql = '''
     WITH serie AS (

@@ -146,6 +146,22 @@ def get_model_year_registrations_matrix(db_path: str, anos_fabricacao: tuple[int
     return queries.model_year_registrations_matrix(con, anos=list(anos_fabricacao), competencia=competencia)
 
 
+@st.cache_data
+def get_model_year_territory_snapshot(
+    db_path: str,
+    anos_fabricacao: tuple[int, ...],
+    competencia: str,
+    granularity: str,
+):
+    con = get_connection(db_path)
+    return queries.model_year_territory_snapshot(
+        con,
+        anos=list(anos_fabricacao),
+        competencia=competencia,
+        granularity=granularity,
+    )
+
+
 def format_reference_month(value: str | pd.Timestamp) -> str:
     ts = pd.Timestamp(value)
     return f"{MONTH_LABELS_PT[int(ts.month)]}/{str(ts.year)[-2:]}"
@@ -808,6 +824,108 @@ def render_matrix_line_chart(matrix_df, title: str, y_axis_title: str, key: str)
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_territory_growth_view(db_path: str, competencia: str, selected_years: list[int], year_label: str):
+    uf_df = get_model_year_territory_snapshot(db_path, tuple(selected_years), competencia, "uf")
+    city_df = get_model_year_territory_snapshot(db_path, tuple(selected_years), competencia, "municipio")
+    reference_month = format_reference_month(competencia)
+
+    st.caption(
+        "Como ler: esta visão mostra onde o recorte ganhou mais tração no mês e onde já existe mais massa crítica. "
+        "O `ganho mensal` é o crescimento positivo versus o mês anterior dentro do recorte selecionado."
+    )
+
+    if uf_df.empty and city_df.empty:
+        st.info("Sem dados territoriais para o recorte selecionado.")
+        return
+
+    top_uf = uf_df.head(12).copy()
+    top_city = city_df.head(15).copy()
+
+    k1, k2, k3 = st.columns(3)
+    if not top_uf.empty:
+        uf_row = top_uf.iloc[0]
+        k1.metric(
+            "UF com maior ganho",
+            str(uf_row["uf"]).title(),
+            delta=f"+{int(uf_row['ganho_mensal']):,} no mês".replace(",", "."),
+        )
+    else:
+        k1.metric("UF com maior ganho", "n/d")
+
+    if not top_city.empty:
+        city_row = top_city.iloc[0]
+        k2.metric(
+            "Cidade com maior ganho",
+            f"{str(city_row['municipio']).title()} / {str(city_row['uf']).title()}",
+            delta=f"+{int(city_row['ganho_mensal']):,} no mês".replace(",", "."),
+        )
+    else:
+        k2.metric("Cidade com maior ganho", "n/d")
+
+    current_total = int(uf_df["total_atual"].sum()) if not uf_df.empty else 0
+    k3.metric("Frota do recorte", f"{current_total:,}".replace(",", "."), delta=reference_month)
+
+    col1, col2 = st.columns((1, 1))
+    with col1:
+        st.dataframe(
+            top_uf[["uf", "ganho_mensal", "total_atual", "delta_liquido"]],
+            use_container_width=True,
+            hide_index=True,
+            height=420,
+            column_config={
+                "uf": "UF",
+                "ganho_mensal": "Ganho mensal",
+                "total_atual": "Frota atual",
+                "delta_liquido": "Delta líquido",
+            },
+        )
+    with col2:
+        fig_uf = px.bar(
+            top_uf.sort_values("ganho_mensal", ascending=True),
+            x="ganho_mensal",
+            y="uf",
+            orientation="h",
+            title=f"Territórios com maior ganho | UF | {year_label}",
+            color_discrete_sequence=[HARLEY_ORANGE],
+        )
+        fig_uf.update_layout(xaxis_title="Ganho mensal", yaxis_title="UF")
+        st.plotly_chart(fig_uf, use_container_width=True)
+
+    non_empty_city = top_city[top_city["municipio"].notna()].copy()
+    if not non_empty_city.empty:
+        non_empty_city["territorio"] = (
+            non_empty_city["municipio"].astype(str).str.title()
+            + " / "
+            + non_empty_city["uf"].astype(str).str.title()
+        )
+        col3, col4 = st.columns((1, 1))
+        with col3:
+            st.dataframe(
+                non_empty_city[["territorio", "ganho_mensal", "total_atual", "delta_liquido"]],
+                use_container_width=True,
+                hide_index=True,
+                height=480,
+                column_config={
+                    "territorio": "Cidade",
+                    "ganho_mensal": "Ganho mensal",
+                    "total_atual": "Frota atual",
+                    "delta_liquido": "Delta líquido",
+                },
+            )
+        with col4:
+            fig_city = px.scatter(
+                non_empty_city,
+                x="total_atual",
+                y="ganho_mensal",
+                size="total_atual",
+                hover_name="territorio",
+                title=f"Massa crítica vs ganho mensal | Cidade | {year_label}",
+                color_discrete_sequence=[HARLEY_ORANGE],
+            )
+            fig_city.update_layout(xaxis_title="Frota atual", yaxis_title="Ganho mensal")
+            st.plotly_chart(fig_city, use_container_width=True)
+
+
 def render_search_explorer_view(db_path: str, competencia: str):
     st.subheader("Busca livre")
     st.caption("Como ler: digite uma string para explorar famílias, códigos e variações de modelo. Depois refine por ano-modelo, UF e município, e escolha como quer quebrar a série histórica.")
@@ -966,7 +1084,7 @@ def render_models_by_year(db_path: str, competencia: str):
     st.caption(f"Mês de referência: {reference_month}")
     st.caption("Como ler: aqui o foco sai do macro e entra no mix de produto. Use as abas para alternar entre estoque acumulado e emplacamentos mensais.")
 
-    tab_frota, tab_emplacamentos = st.tabs(["Frota", "Emplacamentos"])
+    tab_frota, tab_emplacamentos, tab_territorio = st.tabs(["Frota", "Emplacamentos", "Território"])
 
     with tab_frota:
         st.caption("Como ler: cada linha é um modelo. As colunas mostram a evolução do estoque ao longo do ano. Quando houver um único MY selecionado, você também pode abrir o detalhe.")
@@ -1008,6 +1126,14 @@ def render_models_by_year(db_path: str, competencia: str):
             title=f"Emplacamentos mensais | {year_label}",
             y_axis_title="Emplacamentos",
             key="registrations_matrix_chart",
+        )
+
+    with tab_territorio:
+        render_territory_growth_view(
+            db_path=db_path,
+            competencia=competencia,
+            selected_years=selected_years,
+            year_label=year_label,
         )
 
 
