@@ -362,6 +362,18 @@ def search_model_instances(con, pattern: str):
     return query_df(con, sql, [pattern])
 
 
+def list_model_codes(con, competencia: str):
+    sql = '''
+    SELECT DISTINCT marca_modelo
+    FROM frota_harley
+    WHERE competencia <= ?
+      AND marca_modelo IS NOT NULL
+      AND trim(marca_modelo) <> ''
+    ORDER BY marca_modelo
+    '''
+    return query_df(con, sql, [competencia])
+
+
 def registrations_macro_monthly(con, table_name: str = "frota_harley"):
     if table_name not in {"frota_harley", "frota_indian"}:
         raise ValueError(f"Unsupported fleet table: {table_name}")

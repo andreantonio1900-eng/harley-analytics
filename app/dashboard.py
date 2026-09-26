@@ -106,6 +106,13 @@ def get_search_model_instances(db_path: str, pattern: str):
 
 
 @st.cache_data
+def get_model_codes(db_path: str, competencia: str) -> list[str]:
+    con = get_connection(db_path)
+    df = queries.list_model_codes(con, competencia=competencia)
+    return df["marca_modelo"].astype(str).tolist()
+
+
+@st.cache_data
 def get_commercial_year_stock_series(
     db_path: str,
     ano_comercial: int,
@@ -1263,21 +1270,26 @@ def render_territory_growth_view(db_path: str, competencia: str, selected_years:
 
 def render_search_explorer_view(db_path: str, competencia: str):
     st.subheader("Busca livre")
-    st.caption("Como ler: digite uma string para explorar famílias, códigos de modelo e variações de modelo. Depois refine por ano-modelo, UF e município, e escolha como quer quebrar a série histórica.")
+    st.caption(
+        "Selecione ou digite para localizar um código modelo. Depois, se quiser, "
+        "restrinja o relatório aos anos-modelo disponíveis para esse código."
+    )
 
-    search_term = st.text_input(
-        "Buscar por string",
-        value="",
-        placeholder="Ex.: 883, FLHX, Road Glide, Pan America",
-        key="free_search_term",
-    ).strip()
-    if len(search_term) < 2:
-        st.info("Digite pelo menos 2 caracteres para buscar na base.")
+    model_codes = get_model_codes(db_path, competencia)
+    selected_code = st.selectbox(
+        "Código modelo",
+        options=model_codes,
+        index=None,
+        placeholder="Digite ou selecione um código modelo",
+        key="free_search_model_code",
+    )
+    if not selected_code:
+        st.info("Selecione um código modelo para gerar o relatório.")
         return
 
-    raw_df = enrich_models(get_search_model_instances(db_path, f"%{search_term}%"))
+    raw_df = get_search_model_instances(db_path, selected_code)
     if raw_df.empty:
-        st.info("Nenhuma instância encontrada para essa busca.")
+        st.info("Nenhum registro encontrado para esse código modelo.")
         return
 
     raw_df["competencia"] = pd.to_datetime(raw_df["competencia"])
@@ -1289,60 +1301,37 @@ def render_search_explorer_view(db_path: str, competencia: str):
     my_options = sorted(
         [int(value) for value in raw_df["ano_fabricacao"].dropna().unique().tolist() if int(value) <= pd.Timestamp(competencia).year]
     )
-    uf_options = sorted(raw_df["uf"].dropna().astype(str).unique().tolist())
-    city_options = sorted(raw_df["municipio"].dropna().astype(str).unique().tolist())
-
-    f1, f2, f3 = st.columns((1, 1, 1))
-    with f1:
-        selected_years = st.multiselect(
-            "Filtrar por MY",
-            options=my_options,
-            default=[],
-            format_func=lambda year: f"MY {year}",
-            key="free_search_my_filter",
-        )
-    with f2:
-        selected_ufs = st.multiselect(
-            "Filtrar por UF",
-            options=uf_options,
-            default=[],
-            key="free_search_uf_filter",
-        )
-    with f3:
-        selected_cities = st.multiselect(
-            "Filtrar por município",
-            options=city_options,
-            default=[],
-            key="free_search_city_filter",
-        )
+    selected_years = st.multiselect(
+        "Ano-modelo (opcional)",
+        options=my_options,
+        default=[],
+        format_func=lambda year: f"MY {year}",
+        placeholder="Todos os anos-modelo",
+        key=f"free_search_my_filter_{selected_code}",
+    )
 
     filtered_df = raw_df.copy()
     if selected_years:
         filtered_df = filtered_df[filtered_df["ano_fabricacao"].isin(selected_years)]
-    if selected_ufs:
-        filtered_df = filtered_df[filtered_df["uf"].isin(selected_ufs)]
-    if selected_cities:
-        filtered_df = filtered_df[filtered_df["municipio"].isin(selected_cities)]
 
     if filtered_df.empty:
-        st.info("Os filtros zeraram o recorte. Ajuste os toggles para continuar.")
+        st.info("O filtro de ano-modelo não possui unidades nesse recorte.")
         return
 
     snapshot_df = (
         filtered_df[filtered_df["competencia"] == pd.Timestamp(competencia)]
-        .groupby(["codigo_modelo", "nome_amigavel", "nome_exibicao", "ano_fabricacao"], as_index=False)["qtd_veiculos"]
+        .groupby(["marca_modelo", "ano_fabricacao"], as_index=False)["qtd_veiculos"]
         .sum()
-        .sort_values(["qtd_veiculos", "codigo_modelo"], ascending=[False, True])
+        .sort_values(["ano_fabricacao"], ascending=False)
     )
 
     st.dataframe(
-        snapshot_df[["codigo_modelo", "nome_amigavel", "ano_fabricacao", "qtd_veiculos"]],
+        snapshot_df[["marca_modelo", "ano_fabricacao", "qtd_veiculos"]],
         use_container_width=True,
         hide_index=True,
         height=340,
         column_config={
-            "codigo_modelo": "Código modelo",
-            "nome_amigavel": "Nome comercial",
+            "marca_modelo": "Código modelo",
             "ano_fabricacao": "MY",
             "qtd_veiculos": "Unidades",
         },
@@ -1352,9 +1341,9 @@ def render_search_explorer_view(db_path: str, competencia: str):
     if not detail_candidates.empty:
         detail_candidates["detail_label"] = detail_candidates.apply(
             lambda row: (
-                f"{row['nome_exibicao']} | MY {int(row['ano_fabricacao'])}"
+                f"{row['marca_modelo']} | MY {int(row['ano_fabricacao'])}"
                 if pd.notna(row["ano_fabricacao"])
-                else f"{row['nome_exibicao']} | MY -"
+                else f"{row['marca_modelo']} | MY -"
             ),
             axis=1,
         )
@@ -1368,7 +1357,7 @@ def render_search_explorer_view(db_path: str, competencia: str):
         ].iloc[0]
         if st.button("Ir para detalhe do modelo", key="free_search_detail_button"):
             set_model_detail_context(
-                modelo=selected_detail_row["codigo_modelo"],
+                modelo=selected_detail_row["marca_modelo"],
                 db_path=db_path,
                 competencia=competencia,
                 ano_fabricacao=(
@@ -1381,7 +1370,7 @@ def render_search_explorer_view(db_path: str, competencia: str):
 
     segment = st.selectbox(
         "Segmentar série por",
-        options=["Consolidado", "Modelo", "Ano-modelo", "UF", "Município"],
+        options=["Consolidado", "Ano-modelo"],
         index=0,
         key="free_search_segment",
     )
@@ -1392,21 +1381,14 @@ def render_search_explorer_view(db_path: str, competencia: str):
             .sum()
             .rename(columns={"qtd_veiculos": "valor"})
         )
-        chart_df["serie"] = f"Busca: {search_term}"
+        chart_df["serie"] = selected_code
     else:
-        segment_map = {
-            "Modelo": "nome_exibicao",
-            "Ano-modelo": "ano_fabricacao",
-            "UF": "uf",
-            "Município": "municipio",
-        }
-        col = segment_map[segment]
         chart_df = (
-            filtered_df.groupby(["competencia", col], as_index=False)["qtd_veiculos"]
+            filtered_df.groupby(["competencia", "ano_fabricacao"], as_index=False)["qtd_veiculos"]
             .sum()
-            .rename(columns={"qtd_veiculos": "valor", col: "serie"})
+            .rename(columns={"qtd_veiculos": "valor", "ano_fabricacao": "serie"})
         )
-        chart_df["serie"] = chart_df["serie"].astype(str)
+        chart_df["serie"] = "MY " + chart_df["serie"].astype(int).astype(str)
 
     chart_df["competencia_label"] = chart_df["competencia"].dt.strftime("%b/%y")
     fig = px.line(
@@ -1415,7 +1397,7 @@ def render_search_explorer_view(db_path: str, competencia: str):
         y="valor",
         color="serie",
         markers=True,
-        title=f"Busca livre | {search_term}",
+        title=f"Histórico de unidades | {selected_code}",
     )
     fig.update_layout(
         xaxis_title="Mês",
