@@ -409,7 +409,9 @@ def render_share_by_uf(db_path: str, competencia: str):
 
     st.subheader("Distribuição da Frota por Estado")
     st.caption(
-        f"Onde está concentrada a frota Harley-Davidson no Brasil em {reference_month}."
+        f"Onde está concentrada a frota Harley-Davidson no Brasil em {reference_month}. "
+        "As barras representam a quantidade de motos; os rótulos também mostram a "
+        "participação de cada estado na frota com UF identificada."
     )
 
     metric1, metric2 = st.columns(2)
@@ -422,13 +424,6 @@ def render_share_by_uf(db_path: str, competencia: str):
         ).replace(",", "."),
     )
     metric2.metric("Concentração nas 5 maiores UFs", f"{top5_share:.1f}%")
-
-    display_mode = st.radio(
-        "Exibir como",
-        options=["Frota total", "Participação nacional"],
-        horizontal=True,
-        key="state_distribution_display_mode",
-    )
 
     top_df = identified_df.head(10).copy()
     remaining_df = identified_df.iloc[10:]
@@ -454,13 +449,10 @@ def render_share_by_uf(db_path: str, competencia: str):
         ).replace(",", "."),
         axis=1,
     )
-    value_column = "total_hd_uf" if display_mode == "Frota total" else "share_identificado"
-    x_title = "Unidades" if display_mode == "Frota total" else "Participação na frota com UF identificada (%)"
-
     plot_df = chart_df.iloc[::-1]
     fig_uf = go.Figure(
         go.Bar(
-            x=plot_df[value_column],
+            x=plot_df["total_hd_uf"],
             y=plot_df["estado"],
             orientation="h",
             marker_color=HARLEY_ORANGE,
@@ -475,7 +467,7 @@ def render_share_by_uf(db_path: str, competencia: str):
     )
     fig_uf.update_layout(
         title=f"Top 10 UFs + demais | {reference_month}",
-        xaxis_title=x_title,
+        xaxis_title="Quantidade de motos",
         yaxis_title=None,
         showlegend=False,
         margin={"l": 10, "r": 90, "t": 60, "b": 40},
