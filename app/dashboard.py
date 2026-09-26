@@ -425,23 +425,9 @@ def render_share_by_uf(db_path: str, competencia: str):
     )
     metric2.metric("Concentração nas 5 maiores UFs", f"{top5_share:.1f}%")
 
-    visible_df = identified_df[identified_df["share_identificado"] >= 1.0].copy()
-    below_threshold_df = identified_df[identified_df["share_identificado"] < 1.0].copy()
-    if not below_threshold_df.empty:
-        others_total = float(below_threshold_df["total_hd_uf"].sum())
-        others_row = pd.DataFrame(
-            {
-                "estado": ["Outras UFs (< 1% cada)"],
-                "total_hd_uf": [others_total],
-                "share_identificado": [100.0 * others_total / identified_total],
-            }
-        )
-        chart_df = pd.concat(
-            [visible_df[["estado", "total_hd_uf", "share_identificado"]], others_row],
-            ignore_index=True,
-        )
-    else:
-        chart_df = visible_df[["estado", "total_hd_uf", "share_identificado"]].copy()
+    chart_df = identified_df[
+        ["estado", "total_hd_uf", "share_identificado"]
+    ].copy()
 
     chart_df["rotulo"] = chart_df.apply(
         lambda row: (
@@ -466,10 +452,11 @@ def render_share_by_uf(db_path: str, competencia: str):
         )
     )
     fig_uf.update_layout(
-        title=f"UFs com 1% ou mais + demais | {reference_month}",
+        title=f"Todas as UFs | {reference_month}",
         xaxis_title="Quantidade de motos",
         yaxis_title=None,
         showlegend=False,
+        height=max(620, 29 * len(chart_df) + 120),
         margin={"l": 10, "r": 90, "t": 60, "b": 40},
     )
     st.plotly_chart(fig_uf, use_container_width=True)
@@ -1567,7 +1554,7 @@ def render_dashboard(default_db_path: str):
     with divider_col:
         st.markdown(
             '<div style="border-left: 1px solid rgba(128, 128, 128, 0.35); '
-            'height: 760px; margin: 0 auto;"></div>',
+            'height: 980px; margin: 0 auto;"></div>',
             unsafe_allow_html=True,
         )
     with fleet_distribution_col:
