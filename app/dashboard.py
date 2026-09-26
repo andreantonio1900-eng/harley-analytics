@@ -1541,6 +1541,8 @@ def render_dashboard(default_db_path: str):
 
     filters = render_sidebar(default_db_path)
 
+    render_search_explorer_view(filters.db_path, filters.competencia)
+    st.divider()
     render_kpis(filters.db_path, filters.competencia)
     st.divider()
     render_registrations_macro_view(filters.db_path, filters.competencia)
@@ -1548,7 +1550,5 @@ def render_dashboard(default_db_path: str):
     render_share_by_uf(filters.db_path, filters.competencia)
     st.divider()
     render_top_models_national(filters.db_path, filters.competencia)
-    st.divider()
-    render_search_explorer_view(filters.db_path, filters.competencia)
     st.divider()
     render_models_by_year(filters.db_path, filters.competencia)
