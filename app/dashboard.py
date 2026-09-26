@@ -425,23 +425,23 @@ def render_share_by_uf(db_path: str, competencia: str):
     )
     metric2.metric("Concentração nas 5 maiores UFs", f"{top5_share:.1f}%")
 
-    top_df = identified_df.head(10).copy()
-    remaining_df = identified_df.iloc[10:]
-    if not remaining_df.empty:
-        others_total = float(remaining_df["total_hd_uf"].sum())
+    visible_df = identified_df[identified_df["share_identificado"] >= 1.0].copy()
+    below_threshold_df = identified_df[identified_df["share_identificado"] < 1.0].copy()
+    if not below_threshold_df.empty:
+        others_total = float(below_threshold_df["total_hd_uf"].sum())
         others_row = pd.DataFrame(
             {
-                "estado": ["Outras UFs"],
+                "estado": ["Outras UFs (< 1% cada)"],
                 "total_hd_uf": [others_total],
                 "share_identificado": [100.0 * others_total / identified_total],
             }
         )
         chart_df = pd.concat(
-            [top_df[["estado", "total_hd_uf", "share_identificado"]], others_row],
+            [visible_df[["estado", "total_hd_uf", "share_identificado"]], others_row],
             ignore_index=True,
         )
     else:
-        chart_df = top_df[["estado", "total_hd_uf", "share_identificado"]].copy()
+        chart_df = visible_df[["estado", "total_hd_uf", "share_identificado"]].copy()
 
     chart_df["rotulo"] = chart_df.apply(
         lambda row: (
@@ -449,7 +449,7 @@ def render_share_by_uf(db_path: str, competencia: str):
         ).replace(",", "."),
         axis=1,
     )
-    plot_df = chart_df.iloc[::-1]
+    plot_df = chart_df.sort_values("total_hd_uf", ascending=True)
     fig_uf = go.Figure(
         go.Bar(
             x=plot_df["total_hd_uf"],
@@ -466,7 +466,7 @@ def render_share_by_uf(db_path: str, competencia: str):
         )
     )
     fig_uf.update_layout(
-        title=f"Top 10 UFs + demais | {reference_month}",
+        title=f"UFs com 1% ou mais + demais | {reference_month}",
         xaxis_title="Quantidade de motos",
         yaxis_title=None,
         showlegend=False,
