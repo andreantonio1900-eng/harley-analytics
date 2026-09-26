@@ -485,8 +485,8 @@ def render_top_models_national(db_path: str, competencia: str):
             hide_index=True,
             height=540,
             column_config={
-                "codigo_modelo": "Codigo",
-                "nome_amigavel": "Nome amigavel",
+                "codigo_modelo": "Código modelo",
+                "nome_amigavel": "Nome comercial",
                 "total": "Frota",
             },
         )
@@ -1035,8 +1035,8 @@ def render_sem_info_view(db_path: str, competencia: str):
             hide_index=True,
             height=420,
             column_config={
-                "codigo_modelo": "Código",
-                "nome_amigavel": "Nome amigável",
+                "codigo_modelo": "Código modelo",
+                "nome_amigavel": "Nome comercial",
                 "total_estoque": "Unidades",
             },
         )
@@ -1263,7 +1263,7 @@ def render_territory_growth_view(db_path: str, competencia: str, selected_years:
 
 def render_search_explorer_view(db_path: str, competencia: str):
     st.subheader("Busca livre")
-    st.caption("Como ler: digite uma string para explorar famílias, códigos e variações de modelo. Depois refine por ano-modelo, UF e município, e escolha como quer quebrar a série histórica.")
+    st.caption("Como ler: digite uma string para explorar famílias, códigos de modelo e variações de modelo. Depois refine por ano-modelo, UF e município, e escolha como quer quebrar a série histórica.")
 
     search_term = st.text_input(
         "Buscar por string",
@@ -1341,8 +1341,8 @@ def render_search_explorer_view(db_path: str, competencia: str):
         hide_index=True,
         height=340,
         column_config={
-            "codigo_modelo": "Codigo",
-            "nome_amigavel": "Nome amigavel",
+            "codigo_modelo": "Código modelo",
+            "nome_amigavel": "Nome comercial",
             "ano_fabricacao": "MY",
             "qtd_veiculos": "Unidades",
         },

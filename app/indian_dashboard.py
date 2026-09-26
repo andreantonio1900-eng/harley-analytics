@@ -208,8 +208,8 @@ def render_models(df: pd.DataFrame):
         st.dataframe(
             models.rename(
                 columns={
-                    "marca_modelo": "Código",
-                    "friendly_name": "Nome amigável",
+                    "marca_modelo": "Código modelo",
+                    "friendly_name": "Nome comercial",
                     "qtd_veiculos": "Frota",
                 }
             ),
@@ -455,7 +455,7 @@ def render_city_drilldown(df: pd.DataFrame):
             city_models.rename(
                 columns={
                     "friendly_name": "Modelo",
-                    "marca_modelo": "Código",
+                    "marca_modelo": "Código modelo",
                     "family": "Família",
                     "ano_fabricacao": "Ano-modelo",
                     "qtd_veiculos": "Frota",
@@ -520,8 +520,8 @@ def render_years_and_pending(df: pd.DataFrame):
             st.dataframe(
                 pending_df.rename(
                     columns={
-                        "marca_modelo": "Código",
-                        "friendly_name": "Nome amigável",
+                        "marca_modelo": "Código modelo",
+                        "friendly_name": "Nome comercial",
                         "qtd_veiculos": "Pendente",
                     }
                 ),

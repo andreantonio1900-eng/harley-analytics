@@ -266,8 +266,8 @@ def render_base_builder(db_path: str):
             hide_index=True,
             height=520,
             column_config={
-                "codigo_modelo": "Codigo",
-                "nome_amigavel": "Nome amigavel",
+                "codigo_modelo": "Código modelo",
+                "nome_amigavel": "Nome comercial",
                 "vendas_proxy_total": "Entradas liquidas",
             },
         )
@@ -499,8 +499,8 @@ def render_premium_pyramid(snapshot_df: pd.DataFrame, reference_month: str):
             hide_index=True,
             height=420,
             column_config={
-                "codigo_modelo": "Codigo",
-                "nome_amigavel": "Nome amigavel",
+                "codigo_modelo": "Código modelo",
+                "nome_amigavel": "Nome comercial",
                 "total": "Frota",
             },
         )
@@ -511,8 +511,8 @@ def render_premium_pyramid(snapshot_df: pd.DataFrame, reference_month: str):
             hide_index=True,
             height=420,
             column_config={
-                "codigo_modelo": "Codigo",
-                "nome_amigavel": "Nome amigavel",
+                "codigo_modelo": "Código modelo",
+                "nome_amigavel": "Nome comercial",
                 "total": "Frota",
             },
         )

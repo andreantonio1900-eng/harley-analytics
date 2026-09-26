@@ -393,7 +393,7 @@ def render_model_detail_page():
     glossary_df = enrich_models(pd.DataFrame({"marca_modelo": [modelo]}))
     friendly_name = glossary_df.iloc[0]["nome_amigavel"]
     if str(friendly_name).strip():
-        st.caption(f"Modelo: {modelo} | Nome amigável: {friendly_name} | Mês de referência: {reference_month} | MY: {ano_fabricacao or '-'}")
+        st.caption(f"Código modelo: {modelo} | Nome comercial: {friendly_name} | Mês de referência: {reference_month} | MY: {ano_fabricacao or '-'}")
     else:
         st.caption(f"Modelo: {modelo} | Mês de referência: {reference_month} | MY: {ano_fabricacao or '-'}")
 
