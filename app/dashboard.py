@@ -1545,9 +1545,13 @@ def render_dashboard(default_db_path: str):
     st.divider()
     render_kpis(filters.db_path, filters.competencia)
     st.divider()
-    render_registrations_macro_view(filters.db_path, filters.competencia)
-    st.divider()
-    render_share_by_uf(filters.db_path, filters.competencia)
+    registrations_col, fleet_distribution_col = st.columns(2, gap="large")
+    with registrations_col:
+        with st.container(border=True):
+            render_registrations_macro_view(filters.db_path, filters.competencia)
+    with fleet_distribution_col:
+        with st.container(border=True):
+            render_share_by_uf(filters.db_path, filters.competencia)
     st.divider()
     render_top_models_national(filters.db_path, filters.competencia)
     st.divider()
