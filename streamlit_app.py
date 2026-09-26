@@ -13,8 +13,8 @@ def render_home_hd():
 
 pages = [
     st.Page(render_home_hd, title="Dashboard Harley-Davidson", default=True),
-    st.Page("pages/mercado_brasil.py", title="HD Mercado Brasil"),
-    st.Page("pages/modelo_detalhe.py", title="HD Modelo Detalhe"),
+    st.Page("pages/mercado_brasil.py", title="Harley-Davidson - Análise Geográfica"),
+    st.Page("pages/modelo_detalhe.py", title="Análise Detalhada por Modelo"),
     st.Page("pages/estoque_sem_info.py", title="Unidades Pré-Alocadas [Beta]"),
     st.Page("pages/indian_brasil.py", title="Dashboard Indian Motorcycle"),
     st.Page("pages/roubos_furtos.py", title="Roubos e Furtos SSP [Beta]"),
