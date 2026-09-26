@@ -5,4 +5,12 @@ __pycache__/
 .venv/
 data/*.wal
 data/*.tmp
+data/_download_cache/
+data/frota_harley_[0-9][0-9][0-9][0-9]_[0-9][0-9].duckdb
+data/frota_indian_[0-9][0-9][0-9][0-9]_[0-9][0-9].duckdb
+data/frota_harley_view.duckdb
+exports/
+logs/
+reports/
+tmp/
 .DS_Store

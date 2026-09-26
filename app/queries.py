@@ -24,6 +24,30 @@ def list_years(con):
     return query_df(con, sql)
 
 
+def list_model_years(con, modelo: str):
+    sql = '''
+    SELECT DISTINCT ano_fabricacao
+    FROM frota_harley
+    WHERE marca_modelo = ?
+      AND ano_fabricacao IS NOT NULL
+    ORDER BY ano_fabricacao
+    '''
+    return query_df(con, sql, [modelo])
+
+
+def list_cvo_models(con):
+    sql = '''
+    SELECT
+      marca_modelo,
+      SUM(qtd_veiculos) AS total
+    FROM frota_harley
+    WHERE ano_fabricacao IS NOT NULL
+    GROUP BY marca_modelo
+    ORDER BY total DESC, marca_modelo
+    '''
+    return query_df(con, sql)
+
+
 def info(con):
     sql = '''
     SELECT
@@ -338,15 +362,17 @@ def search_model_instances(con, pattern: str):
     return query_df(con, sql, [pattern])
 
 
-def registrations_macro_monthly(con):
-    sql = '''
+def registrations_macro_monthly(con, table_name: str = "frota_harley"):
+    if table_name not in {"frota_harley", "frota_indian"}:
+        raise ValueError(f"Unsupported fleet table: {table_name}")
+    sql = f'''
     WITH months AS (
       SELECT
         competencia,
         LAG(competencia) OVER (ORDER BY competencia) AS prev_comp
       FROM (
         SELECT DISTINCT competencia
-        FROM frota_harley
+        FROM {table_name}
       )
     ),
     model_stock AS (
@@ -354,7 +380,7 @@ def registrations_macro_monthly(con):
         competencia,
         marca_modelo,
         SUM(qtd_veiculos) AS estoque
-      FROM frota_harley
+      FROM {table_name}
       GROUP BY competencia, marca_modelo
     ),
     current_model AS (
@@ -405,7 +431,7 @@ def registrations_macro_monthly(con):
         ano_fabricacao,
         marca_modelo,
         SUM(qtd_veiculos) AS estoque
-      FROM frota_harley
+      FROM {table_name}
       WHERE ano_fabricacao IS NOT NULL
       GROUP BY competencia, ano_fabricacao, marca_modelo
     ),
@@ -460,7 +486,7 @@ def registrations_macro_monthly(con):
         competencia,
         marca_modelo,
         SUM(qtd_veiculos) AS estoque
-      FROM frota_harley
+      FROM {table_name}
       WHERE ano_fabricacao IS NULL
       GROUP BY competencia, marca_modelo
     ),
@@ -552,105 +578,197 @@ def registrations_macro_monthly(con):
     return query_df(con, sql)
 
 
-def sem_info_my_monthly_series(con, ano_modelo: int):
+def commercial_year_stock_model_series(con, ano_comercial: int, competencia_corte: str):
     sql = '''
-    WITH catalogo AS (
-      SELECT DISTINCT marca_modelo
+    WITH meses AS (
+      SELECT DISTINCT competencia
       FROM frota_harley
-      WHERE ano_fabricacao = ?
+      WHERE EXTRACT(year FROM competencia) = ?
+        AND competencia <= ?
     )
     SELECT
-      competencia,
-      COUNT(DISTINCT marca_modelo) AS modelos,
-      SUM(qtd_veiculos) AS total_sem_info
-    FROM frota_harley
-    WHERE upper(trim(municipio)) = 'SEM INFORMAÇÃO'
-      AND marca_modelo IN (SELECT marca_modelo FROM catalogo)
-      AND EXTRACT(year FROM competencia) IN (?, ?)
-    GROUP BY competencia
-    ORDER BY competencia
+      m.competencia,
+      f.marca_modelo,
+      SUM(f.qtd_veiculos) AS total_estoque
+    FROM meses m
+    LEFT JOIN frota_harley f
+      ON f.competencia = m.competencia
+     AND (
+       upper(trim(coalesce(f.municipio, ''))) LIKE 'SEM INFORMA%'
+       OR upper(trim(coalesce(f.uf, ''))) LIKE 'SEM INFORMA%'
+     )
+     AND EXTRACT(year FROM f.competencia) = ?
+     AND f.competencia <= ?
+    GROUP BY m.competencia, f.marca_modelo
+    HAVING SUM(f.qtd_veiculos) IS NOT NULL
+    ORDER BY m.competencia, f.marca_modelo
     '''
-    return query_df(con, sql, [ano_modelo, ano_modelo - 1, ano_modelo])
+    return query_df(con, sql, [ano_comercial, competencia_corte, ano_comercial, competencia_corte])
 
 
-def sem_info_my_snapshot(con, competencia: str, ano_modelo: int):
+def commercial_year_stock_snapshot(con, ano_comercial: int, competencia_corte: str):
     sql = '''
-    WITH catalogo AS (
-      SELECT DISTINCT marca_modelo
+    WITH serie AS (
+      SELECT
+        competencia,
+        marca_modelo,
+        SUM(qtd_veiculos) AS total_estoque
       FROM frota_harley
-      WHERE ano_fabricacao = ?
+      WHERE (
+          upper(trim(coalesce(municipio, ''))) LIKE 'SEM INFORMA%'
+          OR upper(trim(coalesce(uf, ''))) LIKE 'SEM INFORMA%'
+        )
+        AND EXTRACT(year FROM competencia) = ?
+        AND competencia <= ?
+      GROUP BY competencia, marca_modelo
     ),
-    serie AS (
+    latest_month AS (
+      SELECT MAX(competencia) AS competencia
+      FROM serie
+    ),
+    latest_snapshot AS (
+      SELECT
+        s.competencia,
+        s.marca_modelo,
+        s.total_estoque
+      FROM serie s
+      INNER JOIN latest_month l ON l.competencia = s.competencia
+    ),
+    consolidated AS (
       SELECT
         competencia,
         COUNT(DISTINCT marca_modelo) AS modelos,
-        SUM(qtd_veiculos) AS total_sem_info
-      FROM frota_harley
-      WHERE upper(trim(municipio)) = 'SEM INFORMAÇÃO'
-        AND marca_modelo IN (SELECT marca_modelo FROM catalogo)
-        AND EXTRACT(year FROM competencia) IN (?, ?)
+        SUM(total_estoque) AS total_estoque
+      FROM latest_snapshot
       GROUP BY competencia
     ),
     deltas AS (
       SELECT
         competencia,
-        modelos,
-        total_sem_info,
-        total_sem_info - COALESCE(LAG(total_sem_info) OVER (ORDER BY competencia), 0) AS delta_sem_info
+        COUNT(DISTINCT marca_modelo) AS modelos,
+        SUM(total_estoque) AS total_estoque
       FROM serie
+      GROUP BY competencia
+    ),
+    change_calc AS (
+      SELECT
+        competencia,
+        modelos,
+        total_estoque,
+        total_estoque - COALESCE(LAG(total_estoque) OVER (ORDER BY competencia), 0) AS delta_estoque
+      FROM deltas
     )
     SELECT
-      competencia,
-      modelos,
-      total_sem_info,
-      delta_sem_info
-    FROM deltas
-    WHERE competencia = ?
+      c.competencia,
+      c.modelos,
+      c.total_estoque,
+      d.delta_estoque
+    FROM consolidated c
+    LEFT JOIN change_calc d ON d.competencia = c.competencia
     '''
-    return query_df(con, sql, [ano_modelo, ano_modelo - 1, ano_modelo, competencia])
+    return query_df(con, sql, [ano_comercial, competencia_corte])
 
 
-def sem_info_my_top_models(con, competencia: str, ano_modelo: int, limit: int = 20):
+def commercial_year_stock_top_models(con, ano_comercial: int, competencia_corte: str, limit: int = 20):
     sql = '''
-    WITH catalogo AS (
-      SELECT DISTINCT marca_modelo
+    WITH latest_month AS (
+      SELECT MAX(competencia) AS competencia
       FROM frota_harley
-      WHERE ano_fabricacao = ?
+      WHERE (
+          upper(trim(coalesce(municipio, ''))) LIKE 'SEM INFORMA%'
+          OR upper(trim(coalesce(uf, ''))) LIKE 'SEM INFORMA%'
+        )
+        AND EXTRACT(year FROM competencia) = ?
+        AND competencia <= ?
     )
     SELECT
-      marca_modelo,
-      SUM(qtd_veiculos) AS total_sem_info
-    FROM frota_harley
-    WHERE upper(trim(municipio)) = 'SEM INFORMAÇÃO'
-      AND competencia = ?
-      AND marca_modelo IN (SELECT marca_modelo FROM catalogo)
-      AND EXTRACT(year FROM competencia) IN (?, ?)
-    GROUP BY marca_modelo
-    ORDER BY total_sem_info DESC, marca_modelo
+      f.marca_modelo,
+      SUM(f.qtd_veiculos) AS total_estoque
+    FROM frota_harley f
+    INNER JOIN latest_month l ON l.competencia = f.competencia
+    WHERE (
+        upper(trim(coalesce(f.municipio, ''))) LIKE 'SEM INFORMA%'
+        OR upper(trim(coalesce(f.uf, ''))) LIKE 'SEM INFORMA%'
+      )
+      AND EXTRACT(year FROM f.competencia) = ?
+      AND f.competencia <= ?
+    GROUP BY f.marca_modelo
+    ORDER BY total_estoque DESC, f.marca_modelo
     LIMIT ?
     '''
-    return query_df(con, sql, [ano_modelo, competencia, ano_modelo - 1, ano_modelo, limit])
+    return query_df(con, sql, [ano_comercial, competencia_corte, ano_comercial, competencia_corte, limit])
 
 
-def sem_info_my_model_series(con, ano_modelo: int):
+def inventory_vs_territorialized_series(
+    con,
+    marca_modelo: str,
+    competencia_corte: str,
+):
     sql = '''
-    WITH catalogo AS (
-      SELECT DISTINCT marca_modelo
+    WITH monthly AS (
+      SELECT
+        competencia,
+        SUM(
+          CASE WHEN (
+            upper(trim(coalesce(municipio, ''))) LIKE 'SEM INFORMA%'
+            OR upper(trim(coalesce(uf, ''))) LIKE 'SEM INFORMA%'
+          ) THEN qtd_veiculos ELSE 0 END
+        ) AS inventory,
+        SUM(
+          CASE WHEN NOT (
+            upper(trim(coalesce(municipio, ''))) LIKE 'SEM INFORMA%'
+            OR upper(trim(coalesce(uf, ''))) LIKE 'SEM INFORMA%'
+          ) THEN qtd_veiculos ELSE 0 END
+        ) AS territorializadas
       FROM frota_harley
-      WHERE ano_fabricacao = ?
+      WHERE marca_modelo = ?
+        AND competencia >= CAST(? AS DATE) - INTERVAL '24 months'
+        AND competencia <= ?
+      GROUP BY competencia
+    ),
+    changes AS (
+      SELECT
+        competencia,
+        inventory,
+        territorializadas,
+        GREATEST(
+          territorializadas - LAG(territorializadas) OVER (ORDER BY competencia),
+          0
+        ) AS novas_territorializacoes
+      FROM monthly
     )
     SELECT
       competencia,
-      marca_modelo,
-      SUM(qtd_veiculos) AS total_sem_info
-    FROM frota_harley
-    WHERE upper(trim(municipio)) = 'SEM INFORMAÇÃO'
-      AND marca_modelo IN (SELECT marca_modelo FROM catalogo)
-      AND EXTRACT(year FROM competencia) IN (?, ?)
-    GROUP BY competencia, marca_modelo
-    ORDER BY competencia, marca_modelo
+      inventory,
+      territorializadas,
+      COALESCE(novas_territorializacoes, 0) AS novas_territorializacoes
+    FROM changes
+    ORDER BY competencia
     '''
-    return query_df(con, sql, [ano_modelo, ano_modelo - 1, ano_modelo])
+    return query_df(
+        con,
+        sql,
+        [marca_modelo, competencia_corte, competencia_corte],
+    )
+
+
+def inventory_tracking_models(con, competencia_corte: str):
+    sql = '''
+    SELECT
+      marca_modelo,
+      MAX(competencia) AS ultima_competencia_inventory,
+      MAX(qtd_veiculos) AS pico_inventory
+    FROM frota_harley
+    WHERE competencia >= CAST(? AS DATE) - INTERVAL '24 months'
+      AND competencia <= ?
+      AND (
+        upper(trim(coalesce(municipio, ''))) LIKE 'SEM INFORMA%'
+        OR upper(trim(coalesce(uf, ''))) LIKE 'SEM INFORMA%'
+      )
+    GROUP BY marca_modelo
+    ORDER BY ultima_competencia_inventory DESC, pico_inventory DESC, marca_modelo
+    '''
+    return query_df(con, sql, [competencia_corte, competencia_corte])
 
 def list_models_by_year(con, ano: int, competencia: str | None = None):
     sql = '''
@@ -666,13 +784,12 @@ def list_models_by_year(con, ano: int, competencia: str | None = None):
     return query_df(con, sql, params)
 
 
-def model_year_monthly_matrix(con, anos: list[int], competencia: str):
+def model_year_monthly_matrix(con, anos: list[int], competencia: str, ano_comercial: int):
     if not anos:
         return pd.DataFrame(columns=["marca_modelo"])
 
     competencia_ts = pd.Timestamp(competencia)
-    ano_competencia = int(competencia_ts.year)
-    mes_corte = int(competencia_ts.month)
+    mes_corte = 12 if int(ano_comercial) < int(competencia_ts.year) else int(competencia_ts.month)
     year_placeholders = ", ".join(["?"] * len(anos))
 
     sql = f'''
@@ -689,7 +806,6 @@ def model_year_monthly_matrix(con, anos: list[int], competencia: str):
       FROM frota_harley
       WHERE ano_fabricacao IN ({year_placeholders})
         AND EXTRACT(year FROM competencia) = ?
-        AND competencia <= ?
       GROUP BY marca_modelo, mes
     )
     SELECT
@@ -699,7 +815,7 @@ def model_year_monthly_matrix(con, anos: list[int], competencia: str):
     FROM modelos m
     LEFT JOIN totais t ON t.marca_modelo = m.marca_modelo
     '''
-    params = [*anos, *anos, ano_competencia, competencia]
+    params = [*anos, *anos, ano_comercial]
     df = query_df(con, sql, params)
 
     month_names = {
@@ -740,13 +856,18 @@ def model_year_monthly_matrix(con, anos: list[int], competencia: str):
     return base
 
 
-def model_year_registrations_matrix(con, anos: list[int], competencia: str):
+def model_year_registrations_matrix(con, anos: list[int], competencia: str, ano_comercial: int):
     if not anos:
         return pd.DataFrame(columns=["marca_modelo"])
 
     competencia_ts = pd.Timestamp(competencia)
-    ano_competencia = int(competencia_ts.year)
-    mes_corte = int(competencia_ts.month)
+    mes_corte = 12 if int(ano_comercial) < int(competencia_ts.year) else int(competencia_ts.month)
+    start_competencia = pd.Timestamp(year=int(ano_comercial), month=1, day=1) - pd.DateOffset(months=1)
+    end_competencia = (
+        pd.Timestamp(year=int(ano_comercial), month=12, day=1)
+        if int(ano_comercial) < int(competencia_ts.year)
+        else competencia_ts
+    )
     year_placeholders = ", ".join(["?"] * len(anos))
 
     sql = f'''
@@ -762,7 +883,7 @@ def model_year_registrations_matrix(con, anos: list[int], competencia: str):
         SUM(qtd_veiculos) AS estoque
       FROM frota_harley
       WHERE ano_fabricacao IN ({year_placeholders})
-        AND competencia <= ?
+        AND competencia BETWEEN ? AND ?
       GROUP BY marca_modelo, competencia
     ),
     deltas AS (
@@ -791,7 +912,7 @@ def model_year_registrations_matrix(con, anos: list[int], competencia: str):
     FROM modelos m
     LEFT JOIN totais t ON t.marca_modelo = m.marca_modelo
     '''
-    params = [*anos, *anos, competencia, ano_competencia]
+    params = [*anos, *anos, start_competencia, end_competencia, ano_comercial]
     df = query_df(con, sql, params)
 
     month_names = {
@@ -882,7 +1003,7 @@ def model_year_territory_snapshot(con, anos: list[int], competencia: str, granul
     return query_df(con, sql, params)
 
 
-def model_snapshot(con, modelo: str, competencia: str):
+def model_snapshot(con, modelo: str, competencia: str, ano_fabricacao: int | None = None):
     sql = '''
     WITH serie AS (
       SELECT
@@ -891,6 +1012,12 @@ def model_snapshot(con, modelo: str, competencia: str):
       FROM frota_harley
       WHERE marca_modelo = ?
         AND competencia <= ?
+    '''
+    params = [modelo, competencia]
+    if ano_fabricacao is not None:
+        sql += '\n        AND ano_fabricacao = ?'
+        params.append(ano_fabricacao)
+    sql += '''
       GROUP BY competencia
     ),
     deltas AS (
@@ -907,10 +1034,11 @@ def model_snapshot(con, modelo: str, competencia: str):
     FROM deltas
     WHERE competencia = ?
     '''
-    return query_df(con, sql, [modelo, competencia, competencia])
+    params.append(competencia)
+    return query_df(con, sql, params)
 
 
-def model_share_by_uf(con, modelo: str, competencia: str):
+def model_share_by_uf(con, modelo: str, competencia: str, ano_fabricacao: int | None = None):
     sql = '''
     SELECT
       uf,
@@ -918,13 +1046,25 @@ def model_share_by_uf(con, modelo: str, competencia: str):
     FROM frota_harley
     WHERE marca_modelo = ?
       AND competencia = ?
+    '''
+    params = [modelo, competencia]
+    if ano_fabricacao is not None:
+        sql += '\n      AND ano_fabricacao = ?'
+        params.append(ano_fabricacao)
+    sql += '''
     GROUP BY uf
     ORDER BY total DESC, uf
     '''
-    return query_df(con, sql, [modelo, competencia])
+    return query_df(con, sql, params)
 
 
-def model_share_by_city(con, modelo: str, competencia: str, limit: int = 15):
+def model_share_by_city(
+    con,
+    modelo: str,
+    competencia: str,
+    ano_fabricacao: int | None = None,
+    limit: int = 15,
+):
     sql = '''
     SELECT
       municipio,
@@ -933,11 +1073,18 @@ def model_share_by_city(con, modelo: str, competencia: str, limit: int = 15):
     FROM frota_harley
     WHERE marca_modelo = ?
       AND competencia = ?
+    '''
+    params = [modelo, competencia]
+    if ano_fabricacao is not None:
+        sql += '\n      AND ano_fabricacao = ?'
+        params.append(ano_fabricacao)
+    sql += '''
     GROUP BY municipio, uf
     ORDER BY total DESC, municipio, uf
     LIMIT ?
     '''
-    return query_df(con, sql, [modelo, competencia, limit])
+    params.append(limit)
+    return query_df(con, sql, params)
 
 def fleet_model(con, modelo: str, competencia: str | None = None):
     sql = '''
@@ -1002,17 +1149,29 @@ def model_variation(con, modelo: str, inicio: str, fim: str):
     '''
     return query_df(con, sql, [modelo, inicio, fim, inicio, fim, fim, inicio])
 
-def monthly_series(con, modelo: str):
+def monthly_series(con, modelo: str, ano_fabricacao: int | None = None):
     sql = '''
     SELECT competencia, SUM(qtd_veiculos) AS estoque
     FROM frota_harley
     WHERE marca_modelo = ?
+    '''
+    params = [modelo]
+    if ano_fabricacao is not None:
+        sql += '\n      AND ano_fabricacao = ?'
+        params.append(ano_fabricacao)
+    sql += '''
     GROUP BY competencia
     ORDER BY competencia
     '''
-    return query_df(con, sql, [modelo])
+    return query_df(con, sql, params)
 
-def monthly_entries_proxy(con, modelo: str, inicio: str | None = None, fim: str | None = None):
+def monthly_entries_proxy(
+    con,
+    modelo: str,
+    ano_fabricacao: int | None = None,
+    inicio: str | None = None,
+    fim: str | None = None,
+):
     sql = '''
     WITH calendario AS (
       SELECT DISTINCT competencia
@@ -1022,6 +1181,12 @@ def monthly_entries_proxy(con, modelo: str, inicio: str | None = None, fim: str 
       SELECT competencia, SUM(qtd_veiculos) AS estoque
       FROM frota_harley
       WHERE marca_modelo = ?
+    '''
+    params = [modelo]
+    if ano_fabricacao is not None:
+        sql += '\n        AND ano_fabricacao = ?'
+        params.append(ano_fabricacao)
+    sql += '''
       GROUP BY competencia
     ),
     serie AS (
@@ -1044,7 +1209,6 @@ def monthly_entries_proxy(con, modelo: str, inicio: str | None = None, fim: str 
     FROM deltas
     WHERE 1=1
     '''
-    params = [modelo]
     if inicio:
         sql += ' AND competencia >= ?'
         params.append(inicio)
@@ -1053,3 +1217,19 @@ def monthly_entries_proxy(con, modelo: str, inicio: str | None = None, fim: str 
         params.append(fim)
     sql += ' ORDER BY competencia'
     return query_df(con, sql, params)
+
+
+def model_year_territory_series(con, modelo: str, ano_fabricacao: int):
+    sql = '''
+    SELECT
+      competencia,
+      uf,
+      municipio,
+      SUM(qtd_veiculos) AS qtd_veiculos
+    FROM frota_harley
+    WHERE marca_modelo = ?
+      AND ano_fabricacao = ?
+    GROUP BY competencia, uf, municipio
+    ORDER BY competencia, uf, municipio
+    '''
+    return query_df(con, sql, [modelo, ano_fabricacao])

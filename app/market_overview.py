@@ -407,7 +407,7 @@ def render_geography(snapshot_df: pd.DataFrame, uf_df: pd.DataFrame, city_df: pd
                     "total": "Frota",
                     "share_brasil_pct": "Share Brasil %",
                 }
-            )[["Cidade", "UF", "Frota", "share_brasil_pct"]],
+            )[["Cidade", "UF", "Frota", "Share Brasil %"]],
             use_container_width=True,
             hide_index=True,
             height=420,
@@ -421,7 +421,7 @@ def render_geography(snapshot_df: pd.DataFrame, uf_df: pd.DataFrame, city_df: pd
                     "total": "Frota",
                     "share_uf_pct": "Share da UF %",
                 }
-            )[["Cidade", "UF", "Frota", "share_uf_pct"]],
+            )[["Cidade", "UF", "Frota", "Share da UF %"]],
             use_container_width=True,
             hide_index=True,
             height=420,

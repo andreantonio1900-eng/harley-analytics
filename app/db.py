@@ -1,13 +1,18 @@
 from pathlib import Path
+import os
 import duckdb
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = PROJECT_ROOT / "data" / "frota_harley.duckdb"
+ENV_DB_OVERRIDE = "HARLEY_DB_PATH_OVERRIDE"
 
 def resolve_db_path(db_path: str | None = None) -> Path:
     if db_path:
         return Path(db_path).expanduser().resolve()
+    env_override = os.getenv(ENV_DB_OVERRIDE)
+    if env_override:
+        return Path(env_override).expanduser().resolve()
     return DEFAULT_DB.resolve()
 
 def connect(db_path: str | None = None, read_only: bool = True) -> duckdb.DuckDBPyConnection:

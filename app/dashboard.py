@@ -11,9 +11,10 @@ import streamlit as st
 from app.db import connect
 from app.glossary import enrich_models
 from app import queries
-from app.model_detail import render_matrix_detail_selector
+from app.model_detail import render_matrix_detail_selector, set_model_detail_context
 
 HARLEY_ORANGE = "#FF6A13"
+INVENTORY_QUERY_VERSION = 3
 MONTH_LABELS_PT = {
     1: "jan",
     2: "fev",
@@ -105,27 +106,74 @@ def get_search_model_instances(db_path: str, pattern: str):
 
 
 @st.cache_data
-def get_sem_info_my_monthly_series(db_path: str, ano_fabricacao: int):
+def get_commercial_year_stock_series(
+    db_path: str,
+    ano_comercial: int,
+    competencia: str,
+    inventory_query_version: int,
+):
     con = get_connection(db_path)
-    return queries.sem_info_my_monthly_series(con, ano_modelo=ano_fabricacao)
+    return queries.commercial_year_stock_model_series(
+        con,
+        ano_comercial=ano_comercial,
+        competencia_corte=competencia,
+    )
 
 
 @st.cache_data
-def get_sem_info_my_snapshot(db_path: str, competencia: str, ano_fabricacao: int):
+def get_commercial_year_stock_snapshot(
+    db_path: str,
+    ano_comercial: int,
+    competencia: str,
+    inventory_query_version: int,
+):
     con = get_connection(db_path)
-    return queries.sem_info_my_snapshot(con, competencia=competencia, ano_modelo=ano_fabricacao)
+    return queries.commercial_year_stock_snapshot(
+        con,
+        ano_comercial=ano_comercial,
+        competencia_corte=competencia,
+    )
 
 
 @st.cache_data
-def get_sem_info_my_top_models(db_path: str, competencia: str, ano_fabricacao: int):
+def get_commercial_year_stock_top_models(
+    db_path: str,
+    ano_comercial: int,
+    competencia: str,
+    inventory_query_version: int,
+):
     con = get_connection(db_path)
-    return queries.sem_info_my_top_models(con, competencia=competencia, ano_modelo=ano_fabricacao)
+    return queries.commercial_year_stock_top_models(
+        con,
+        ano_comercial=ano_comercial,
+        competencia_corte=competencia,
+        limit=500,
+    )
 
 
 @st.cache_data
-def get_sem_info_my_model_series(db_path: str, ano_fabricacao: int):
+def get_inventory_vs_territorialized_series(
+    db_path: str,
+    marca_modelo: str,
+    competencia: str,
+    inventory_query_version: int,
+):
     con = get_connection(db_path)
-    return queries.sem_info_my_model_series(con, ano_modelo=ano_fabricacao)
+    return queries.inventory_vs_territorialized_series(
+        con,
+        marca_modelo=marca_modelo,
+        competencia_corte=competencia,
+    )
+
+
+@st.cache_data
+def get_inventory_tracking_models(
+    db_path: str,
+    competencia: str,
+    inventory_query_version: int,
+):
+    con = get_connection(db_path)
+    return enrich_models(queries.inventory_tracking_models(con, competencia))
 
 
 @st.cache_data
@@ -137,13 +185,55 @@ def get_models_by_year(db_path: str, ano_fabricacao: int, competencia: str):
 @st.cache_data
 def get_model_year_monthly_matrix(db_path: str, anos_fabricacao: tuple[int, ...], competencia: str):
     con = get_connection(db_path)
-    return queries.model_year_monthly_matrix(con, anos=list(anos_fabricacao), competencia=competencia)
+    return queries.model_year_monthly_matrix(
+        con,
+        anos=list(anos_fabricacao),
+        competencia=competencia,
+        ano_comercial=pd.Timestamp(competencia).year,
+    )
 
 
 @st.cache_data
 def get_model_year_registrations_matrix(db_path: str, anos_fabricacao: tuple[int, ...], competencia: str):
     con = get_connection(db_path)
-    return queries.model_year_registrations_matrix(con, anos=list(anos_fabricacao), competencia=competencia)
+    return queries.model_year_registrations_matrix(
+        con,
+        anos=list(anos_fabricacao),
+        competencia=competencia,
+        ano_comercial=pd.Timestamp(competencia).year,
+    )
+
+
+@st.cache_data
+def get_model_year_monthly_matrix_by_commercial_year(
+    db_path: str,
+    anos_fabricacao: tuple[int, ...],
+    competencia: str,
+    ano_comercial: int,
+):
+    con = get_connection(db_path)
+    return queries.model_year_monthly_matrix(
+        con,
+        anos=list(anos_fabricacao),
+        competencia=competencia,
+        ano_comercial=ano_comercial,
+    )
+
+
+@st.cache_data
+def get_model_year_registrations_matrix_by_commercial_year(
+    db_path: str,
+    anos_fabricacao: tuple[int, ...],
+    competencia: str,
+    ano_comercial: int,
+):
+    con = get_connection(db_path)
+    return queries.model_year_registrations_matrix(
+        con,
+        anos=list(anos_fabricacao),
+        competencia=competencia,
+        ano_comercial=ano_comercial,
+    )
 
 
 @st.cache_data
@@ -172,6 +262,12 @@ def get_valid_years_for_reference(db_path: str, competencia: str) -> list[int]:
     return [year for year in get_years(db_path) if year <= reference_year]
 
 
+def get_commercial_years(db_path: str, competencia: str) -> list[int]:
+    reference_ts = pd.Timestamp(competencia)
+    competencia_years = sorted({pd.Timestamp(value).year for value in get_competencias(db_path)})
+    return [year for year in competencia_years if year <= reference_ts.year]
+
+
 def format_year_selection_label(years: list[int]) -> str:
     if not years:
         return "Sem MY"
@@ -180,18 +276,18 @@ def format_year_selection_label(years: list[int]) -> str:
     return "MYs " + ", ".join(str(year) for year in years)
 
 
-def render_header():
+def render_header(subtitle: str = "Visão macro da frota Harley-Davidson"):
     col_logo, col_copy = st.columns((1, 3))
     with col_logo:
         if LOGO_PATH.exists():
             st.image(str(LOGO_PATH), use_container_width=True)
     with col_copy:
         st.markdown(
-            """
+            f"""
             <div style="padding-top: 1.1rem;">
                 <h1 style="margin: 0; font-size: 2.3rem; line-height: 1;">Harley Analytics</h1>
                 <p style="margin: 0.45rem 0 0 0; color: #B8BDC7; font-size: 1rem;">
-                    Visão macro da frota Harley-Davidson
+                    {subtitle}
                 </p>
             </div>
             """,
@@ -273,22 +369,104 @@ def render_kpis(db_path: str, competencia: str):
 def render_share_by_uf(db_path: str, competencia: str):
     uf_df = get_share_by_uf(db_path, competencia)
     reference_month = format_reference_month(competencia)
+    identified_df = uf_df[
+        ~uf_df["uf"].astype(str).str.upper().str.startswith("SEM INFORMA")
+    ].copy()
+    if identified_df.empty:
+        st.info("Sem distribuição estadual identificada para o mês selecionado.")
+        return
 
-    col1, col2 = st.columns((1, 1))
-    with col1:
-        st.subheader("Frota por UF")
-        st.caption(f"Mês de referência: {reference_month}")
-        st.caption("Como ler: use esta visão para localizar concentração geográfica. Os primeiros estados são onde a frota está mais forte hoje.")
-        st.dataframe(uf_df, use_container_width=True, hide_index=True)
-    with col2:
-        fig_uf = px.bar(
-            uf_df,
-            x="uf",
-            y="total_hd_uf",
-            title=f"Frota por UF | {reference_month}",
-            color_discrete_sequence=[HARLEY_ORANGE],
+    identified_total = float(identified_df["total_hd_uf"].sum())
+    identified_df["share_identificado"] = (
+        100.0 * identified_df["total_hd_uf"] / identified_total
+    )
+    identified_df["estado"] = identified_df["uf"].astype(str).str.title()
+    identified_df = identified_df.sort_values("total_hd_uf", ascending=False)
+
+    leader = identified_df.iloc[0]
+    top5_share = float(identified_df.head(5)["share_identificado"].sum())
+
+    st.subheader("Distribuição da Frota por Estado")
+    st.caption(
+        f"Onde está concentrada a frota Harley-Davidson no Brasil em {reference_month}."
+    )
+
+    metric1, metric2 = st.columns(2)
+    metric1.metric(
+        "Estado líder",
+        str(leader["estado"]),
+        delta=(
+            f"{int(leader['total_hd_uf']):,} unidades · "
+            f"{leader['share_identificado']:.1f}%"
+        ).replace(",", "."),
+    )
+    metric2.metric("Concentração nas 5 maiores UFs", f"{top5_share:.1f}%")
+
+    display_mode = st.radio(
+        "Exibir como",
+        options=["Frota total", "Participação nacional"],
+        horizontal=True,
+        key="state_distribution_display_mode",
+    )
+
+    top_df = identified_df.head(10).copy()
+    remaining_df = identified_df.iloc[10:]
+    if not remaining_df.empty:
+        others_total = float(remaining_df["total_hd_uf"].sum())
+        others_row = pd.DataFrame(
+            {
+                "estado": ["Outras UFs"],
+                "total_hd_uf": [others_total],
+                "share_identificado": [100.0 * others_total / identified_total],
+            }
         )
-        st.plotly_chart(fig_uf, use_container_width=True)
+        chart_df = pd.concat(
+            [top_df[["estado", "total_hd_uf", "share_identificado"]], others_row],
+            ignore_index=True,
+        )
+    else:
+        chart_df = top_df[["estado", "total_hd_uf", "share_identificado"]].copy()
+
+    chart_df["rotulo"] = chart_df.apply(
+        lambda row: (
+            f"{int(row['total_hd_uf']):,} · {row['share_identificado']:.1f}%"
+        ).replace(",", "."),
+        axis=1,
+    )
+    value_column = "total_hd_uf" if display_mode == "Frota total" else "share_identificado"
+    x_title = "Unidades" if display_mode == "Frota total" else "Participação na frota com UF identificada (%)"
+
+    plot_df = chart_df.iloc[::-1]
+    fig_uf = go.Figure(
+        go.Bar(
+            x=plot_df[value_column],
+            y=plot_df["estado"],
+            orientation="h",
+            marker_color=HARLEY_ORANGE,
+            text=plot_df["rotulo"],
+            textposition="outside",
+            customdata=plot_df[["total_hd_uf", "share_identificado"]],
+            hovertemplate=(
+                "%{y}<br>Frota: %{customdata[0]:,.0f}"
+                "<br>Participação: %{customdata[1]:.1f}%<extra></extra>"
+            ),
+        )
+    )
+    fig_uf.update_layout(
+        title=f"Top 10 UFs + demais | {reference_month}",
+        xaxis_title=x_title,
+        yaxis_title=None,
+        showlegend=False,
+        margin={"l": 10, "r": 90, "t": 60, "b": 40},
+    )
+    st.plotly_chart(fig_uf, use_container_width=True)
+
+    unidentified_total = int(uf_df.loc[~uf_df.index.isin(identified_df.index), "total_hd_uf"].sum())
+    if unidentified_total:
+        st.caption(
+            f"{unidentified_total:,} unidades sem UF identificada foram excluídas da distribuição geográfica."
+            .replace(",", ".")
+        )
 
 
 def render_top_models_national(db_path: str, competencia: str):
@@ -348,6 +526,16 @@ def build_registrations_macro_chart_df(
     if aggregation == "Mensal":
         df["period_start"] = df["competencia"]
         df["period_label"] = df["competencia"].dt.strftime("%b/%y")
+    elif aggregation == "Bimestral":
+        df["bimester"] = ((df["competencia"].dt.month - 1) // 2) + 1
+        df["period_start"] = pd.to_datetime(
+            {
+                "year": df["competencia"].dt.year,
+                "month": (df["bimester"] * 2) - 1,
+                "day": 1,
+            }
+        )
+        df["period_label"] = "B" + df["bimester"].astype(str) + "/" + df["competencia"].dt.year.astype(str)
     elif aggregation == "Trimestral":
         period = df["competencia"].dt.to_period("Q")
         df["period_start"] = period.dt.start_time
@@ -477,36 +665,58 @@ def build_macro_residual_series(
     return other_years, unattributed
 
 
-def render_registrations_macro_view(db_path: str, competencia: str):
-    registrations_df = get_registrations_macro_monthly(db_path)
+def render_registrations_macro_view(
+    db_path: str,
+    competencia: str,
+    *,
+    brand_label: str = "Harley",
+    accent_color: str = HARLEY_ORANGE,
+    key_prefix: str = "macro_registrations",
+    registrations_df: pd.DataFrame | None = None,
+):
+    if registrations_df is None:
+        registrations_df = get_registrations_macro_monthly(db_path)
     reference_month = format_reference_month(competencia)
 
-    st.subheader("Vendas macro")
+    st.subheader("Ritmo de Emplacamentos por Ano-Modelo")
     st.caption("Como ler: esta visão mostra o ciclo de vida comercial de cada ano-modelo. Você consegue ver quando um MY começa a vender, ganha tração e perde força até a entrada do próximo.")
 
     control_col1, control_col2, control_col3 = st.columns((1, 1, 2))
     with control_col1:
         aggregation = st.selectbox(
             "Agrupamento",
-            options=["Mensal", "Trimestral", "Semestral"],
+            options=["Mensal", "Bimestral", "Trimestral", "Semestral"],
             index=0,
-            key="macro_registrations_aggregation",
+            key=f"{key_prefix}_aggregation",
         )
     with control_col2:
         range_label = st.selectbox(
             "Janela",
-            options=["3 meses", "6 meses", "12 meses", "24 meses", "All time"],
+            options=[
+                "3 meses",
+                "6 meses",
+                "12 meses",
+                "24 meses",
+                "36 meses",
+                "48 meses",
+                "All time",
+            ],
             index=2,
-            key="macro_registrations_range",
+            key=f"{key_prefix}_range",
         )
     with control_col3:
-        st.caption("A curva consolidada permanece como referência. O gráfico sempre fecha a conta com `Outros MYs` e `MY nao identificado` quando houver diferença para os anos-modelo escolhidos.")
+        st.caption(
+            "A curva TOTAL soma somente os MYs selecionados. Assim, registros sem MY e "
+            "anos-modelo fora do recorte não criam picos artificiais."
+        )
 
     range_map = {
         "3 meses": 3,
         "6 meses": 6,
         "12 meses": 12,
         "24 meses": 24,
+        "36 meses": 36,
+        "48 meses": 48,
         "All time": None,
     }
     range_months = range_map[range_label]
@@ -526,13 +736,13 @@ def render_registrations_macro_view(db_path: str, competencia: str):
         options=year_options,
         default=default_years,
         format_func=lambda year: f"MY {year}",
-        key=f"macro_registrations_years_{aggregation}_{range_label}",
+        key=f"{key_prefix}_years_{aggregation}_{range_label}",
     )
     support_curves = st.multiselect(
         "Curvas de apoio",
-        options=["Total Harley", "Outros MYs", "MY nao identificado"],
-        default=["Total Harley", "Outros MYs", "MY nao identificado"],
-        key=f"macro_registrations_support_curves_{aggregation}_{range_label}",
+        options=["TOTAL selecionado", f"Total {brand_label} bruto", "Outros MYs", "MY nao identificado"],
+        default=["TOTAL selecionado"],
+        key=f"{key_prefix}_support_curves_v2_{aggregation}_{range_label}",
     )
 
     by_year_selected = build_selected_model_years_chart_df(
@@ -541,7 +751,7 @@ def render_registrations_macro_view(db_path: str, competencia: str):
         selected_years=selected_years,
     )
     if not selected_years and not support_curves:
-        st.info("Selecione pelo menos um ano-modelo ou uma curva de apoio para montar a visão de vendas.")
+        st.info("Selecione pelo menos um ano-modelo ou uma curva de apoio para montar a visão de emplacamentos.")
         return
 
     other_years, unattributed_residual = build_macro_residual_series(
@@ -552,15 +762,33 @@ def render_registrations_macro_view(db_path: str, competencia: str):
     )
 
     fig = go.Figure()
-    if "Total Harley" in support_curves:
+    selected_total = (
+        by_year_selected.groupby(["period_start", "period_label"], as_index=False)["emplacamentos"]
+        .sum()
+        .sort_values("period_start")
+    )
+    if "TOTAL selecionado" in support_curves and not selected_total.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=selected_total["period_start"],
+                y=selected_total["emplacamentos"],
+                mode="lines+markers",
+                name="TOTAL selecionado",
+                line={"color": accent_color, "width": 4},
+                hovertemplate="%{x|%b/%y}<br>TOTAL selecionado: %{y:.0f}<extra></extra>",
+            )
+        )
+
+    gross_total_label = f"Total {brand_label} bruto"
+    if gross_total_label in support_curves:
         fig.add_trace(
             go.Scatter(
                 x=consolidated["period_start"],
                 y=consolidated["emplacamentos"],
                 mode="lines+markers",
-                name="Total Harley",
-                line={"color": HARLEY_ORANGE, "width": 4},
-                hovertemplate="%{x|%b/%y}<br>Total Harley: %{y:.0f}<extra></extra>",
+                name=gross_total_label,
+                line={"color": "#777777", "width": 2, "dash": "dot"},
+                hovertemplate=f"%{{x|%b/%y}}<br>{gross_total_label}: %{{y:.0f}}<extra></extra>",
             )
         )
 
@@ -601,7 +829,7 @@ def render_registrations_macro_view(db_path: str, competencia: str):
         )
 
     fig.update_layout(
-        title=f"Vendas Harley | {aggregation} | até {reference_month}",
+        title=f"Ritmo de Emplacamentos | {aggregation} | até {reference_month}",
         xaxis_title="Período",
         yaxis_title="Unidades",
         legend_title_text="Curvas",
@@ -612,120 +840,227 @@ def render_registrations_macro_view(db_path: str, competencia: str):
 
 
 def render_sem_info_view(db_path: str, competencia: str):
-    years = get_valid_years_for_reference(db_path, competencia)
-    if not years:
-        st.info("Não há anos-modelo válidos para o mês de referência selecionado.")
+    commercial_years = get_commercial_years(db_path, competencia)
+    if not commercial_years:
+        st.info("Não há anos comerciais válidos para o mês de referência selecionado.")
         return
-    ano_fabricacao = st.selectbox(
-        "Ano-modelo do dealer inventory",
-        options=years,
-        index=len(years) - 1,
-        key="sem_info_my_selector",
+
+    default_year = pd.Timestamp(competencia).year
+    ano_comercial = st.selectbox(
+        "Ano comercial das unidades pré-alocadas",
+        options=commercial_years,
+        index=commercial_years.index(default_year) if default_year in commercial_years else len(commercial_years) - 1,
+        key="stock_view_commercial_year_selector",
     )
-    ano_competencia = int(competencia[:4])
     reference_month = format_reference_month(competencia)
-    snapshot_df = get_sem_info_my_snapshot(db_path, competencia, ano_fabricacao)
-    series_df = get_sem_info_my_monthly_series(db_path, ano_fabricacao)
-    top_models_df = enrich_models(get_sem_info_my_top_models(db_path, competencia, ano_fabricacao))
-    model_series_df = enrich_models(get_sem_info_my_model_series(db_path, ano_fabricacao))
+    snapshot_df = get_commercial_year_stock_snapshot(
+        db_path, ano_comercial, competencia, INVENTORY_QUERY_VERSION
+    )
+    model_series_df = enrich_models(
+        get_commercial_year_stock_series(
+            db_path, ano_comercial, competencia, INVENTORY_QUERY_VERSION
+        )
+    )
+    top_models_df = enrich_models(
+        get_commercial_year_stock_top_models(
+            db_path, ano_comercial, competencia, INVENTORY_QUERY_VERSION
+        )
+    )
 
-    st.subheader(f"Estoque pendente de emplacamento | MY {ano_fabricacao}")
-    st.caption("Proxy: registros com `SEM INFORMAÇÃO` dentro da janela MY-1 até MY.")
-    st.caption("Como ler: pense aqui como uma leitura de `dealer inventory`. Esse estoque pode estar na fábrica e/ou nas concessionárias, já cadastrado no sistema VIN, mas ainda aguardando emplacamento.")
+    st.subheader(f"Unidades Pré-Alocadas | {ano_comercial}")
+    st.caption(
+        "O que este painel comunica: potencial estoque de motocicletas em prateleira, "
+        "ainda pendentes de emplacamento. Não sabemos se essas unidades estão na fábrica, "
+        "em trânsito ou em uma concessionária; para simplificar a análise, tratamos todo "
+        "esse volume como INVENTORY."
+    )
+    st.caption(f"O mês de referência continua definindo até onde a base pode ir; o gráfico abaixo plota apenas o calendário de {ano_comercial}.")
 
-    if ano_competencia not in {ano_fabricacao - 1, ano_fabricacao}:
-        st.info(f"O mês de referência {reference_month} está fora da janela operacional deste proxy para o MY {ano_fabricacao}. Use meses de {ano_fabricacao - 1} ou {ano_fabricacao}.")
-        return
-
-    if snapshot_df.empty:
-        st.info("Sem registros `SEM INFORMAÇÃO` associados ao MY selecionado no mês escolhido.")
+    if snapshot_df.empty or model_series_df.empty:
+        st.info("Sem unidades pré-alocadas no ano comercial selecionado.")
         return
 
     row = snapshot_df.iloc[0]
+    latest_month = format_reference_month(str(row["competencia"]))
     c1, c2, c3 = st.columns(3)
-    c1.metric("Unidades sem informação", f"{int(row['total_sem_info']):,}".replace(",", "."))
-    c2.metric("Modelos afetados", int(row["modelos"]))
-    c3.metric("Delta vs mês anterior", f"{int(row['delta_sem_info']):+,}".replace(",", "."))
+    c1.metric("Unidades Pré-Alocadas", f"{int(row['total_estoque']):,}".replace(",", "."))
+    c2.metric("Modelos em pré-alocação", int(row["modelos"]))
+    c3.metric("Delta vs mês anterior", f"{int(row['delta_estoque']):+,}".replace(",", "."), delta=latest_month)
+
+    consolidated_df = (
+        model_series_df.groupby("competencia", as_index=False)["total_estoque"]
+        .sum()
+        .rename(columns={"total_estoque": "valor"})
+    )
+    consolidated_df["serie"] = "Consolidado"
+
+    plot_consolidated = st.checkbox(
+        "Plotar curva consolidada",
+        value=True,
+        key=f"stock_view_consolidated_toggle_{ano_comercial}_{competencia}",
+    )
+
+    model_options = top_models_df["codigo_modelo"].tolist()
+    default_models = model_options[: min(8, len(model_options))]
+    selected_models = st.multiselect(
+        "Modelos plotados",
+        options=model_options,
+        default=default_models,
+        format_func=lambda code: top_models_df.loc[top_models_df["codigo_modelo"] == code, "nome_exibicao"].iloc[0],
+        key=f"stock_view_model_toggle_{ano_comercial}_{competencia}",
+    )
+
+    chart_frames = []
+    if plot_consolidated:
+        chart_frames.append(consolidated_df)
+    if selected_models:
+        selected_df = (
+            model_series_df[model_series_df["codigo_modelo"].isin(selected_models)][
+                ["competencia", "nome_exibicao", "total_estoque"]
+            ]
+            .rename(columns={"nome_exibicao": "serie", "total_estoque": "valor"})
+        )
+        chart_frames.append(selected_df)
+
+    if not chart_frames:
+        st.info("Ative a curva consolidada ou selecione pelo menos um modelo para plotar.")
+        return
+
+    chart_df = pd.concat(chart_frames, ignore_index=True)
+    chart_df["competencia"] = pd.to_datetime(chart_df["competencia"])
+
+    fig_detail = px.line(
+        chart_df,
+        x="competencia",
+        y="valor",
+        color="serie",
+        markers=True,
+        title=f"Unidades Pré-Alocadas | Ano comercial {ano_comercial}",
+    )
+    fig_detail.update_layout(
+        xaxis_title="Mês",
+        yaxis_title="Unidades",
+        legend_title_text="Série",
+        hovermode="x unified",
+    )
+    fig_detail.update_xaxes(tickformat="%b/%y")
+    st.plotly_chart(fig_detail, use_container_width=True)
+
+    st.subheader("O que saiu x o que ficou")
+    tracking_models_df = get_inventory_tracking_models(
+        db_path, competencia, INVENTORY_QUERY_VERSION
+    )
+    comparison_options = tracking_models_df["codigo_modelo"].tolist()
+    comparison_default = "H-D/FLSTFI"
+    comparison_model = st.selectbox(
+        "Modelo para comparar",
+        options=comparison_options,
+        index=(
+            comparison_options.index(comparison_default)
+            if comparison_default in comparison_options
+            else 0
+        ),
+        format_func=lambda code: tracking_models_df.loc[
+            tracking_models_df["codigo_modelo"] == code, "nome_exibicao"
+        ].iloc[0],
+        key=f"inventory_comparison_model_v3_{competencia}",
+    )
+    comparison_df = get_inventory_vs_territorialized_series(
+        db_path,
+        comparison_model,
+        competencia,
+        INVENTORY_QUERY_VERSION,
+    ).copy()
+
+    if not comparison_df.empty:
+        comparison_df["competencia"] = pd.to_datetime(comparison_df["competencia"])
+        comparison_name = tracking_models_df.loc[
+            tracking_models_df["codigo_modelo"] == comparison_model, "nome_exibicao"
+        ].iloc[0]
+        comparison_fig = go.Figure()
+        comparison_fig.add_trace(
+            go.Bar(
+                x=comparison_df["competencia"],
+                y=comparison_df["novas_territorializacoes"],
+                name="Novas territorializações",
+                marker_color="#A7A7A7",
+                opacity=0.55,
+                hovertemplate="%{x|%b/%y}<br>Novas territorializações: %{y:.0f}<extra></extra>",
+            )
+        )
+        comparison_fig.add_trace(
+            go.Scatter(
+                x=comparison_df["competencia"],
+                y=comparison_df["inventory"],
+                mode="lines+markers",
+                name="INVENTORY no fechamento",
+                line={"color": HARLEY_ORANGE, "width": 3},
+                marker={"size": 7},
+                hovertemplate="%{x|%b/%y}<br>INVENTORY: %{y:.0f}<extra></extra>",
+            )
+        )
+        comparison_fig.update_layout(
+            title=f"{comparison_name} | Tracking de 24 meses",
+            xaxis_title="Mês",
+            yaxis_title="Unidades",
+            hovermode="x unified",
+            barmode="overlay",
+            legend_title_text="Leitura",
+        )
+        comparison_fig.update_xaxes(tickformat="%b/%y")
+        st.plotly_chart(comparison_fig, use_container_width=True)
+
+        latest_comparison = comparison_df.iloc[-1]
+        left, right = st.columns(2)
+        left.metric(
+            "Territorializadas no mês (proxy de saída)",
+            f"{int(latest_comparison['novas_territorializacoes']):,}".replace(",", "."),
+        )
+        right.metric(
+            "INVENTORY no fechamento",
+            f"{int(latest_comparison['inventory']):,}".replace(",", "."),
+        )
+        st.caption(
+            "A territorialização é uma aproximação de saída de INVENTORY. "
+            "Sem identificação por chassi, não é possível comprovar a conversão individual das unidades."
+        )
 
     col1, col2 = st.columns((1, 1))
     with col1:
-        st.subheader("Top modelos")
-        st.caption(f"Mês de referência: {reference_month}")
-        st.caption("Como ler: a tabela mostra quais modelos mais puxam esse estoque pendente no mês selecionado.")
+        st.subheader("Modelos pré-alocados no último mês")
+        st.caption(f"Última foto disponível dentro de {ano_comercial}: {latest_month}")
         st.dataframe(
-            top_models_df[["codigo_modelo", "nome_amigavel", "total_sem_info"]],
+            top_models_df[["codigo_modelo", "nome_amigavel", "total_estoque"]],
             use_container_width=True,
             hide_index=True,
             height=420,
             column_config={
-                "codigo_modelo": "Codigo",
-                "nome_amigavel": "Nome amigavel",
-                "total_sem_info": "Unidades",
+                "codigo_modelo": "Código",
+                "nome_amigavel": "Nome amigável",
+                "total_estoque": "Unidades",
             },
         )
     with col2:
         fig_top = px.bar(
             top_models_df.head(12),
             x="nome_exibicao",
-            y="total_sem_info",
-            title=f"Top modelos | MY {ano_fabricacao} | {reference_month}",
+            y="total_estoque",
+            title=f"Top modelos pré-alocados | {latest_month}",
             color_discrete_sequence=[HARLEY_ORANGE],
         )
+        fig_top.update_layout(xaxis_title="Modelo", yaxis_title="Unidades")
         st.plotly_chart(fig_top, use_container_width=True)
 
-    if not top_models_df.empty and not model_series_df.empty:
-        model_options = top_models_df["codigo_modelo"].tolist()
-        default_models = model_options[:8]
-        aggregate_all_models = st.checkbox(
-            "Curva consolidada: todos os modelos",
-            value=False,
-            key=f"sem_info_select_all_{ano_fabricacao}_{competencia}",
-        )
 
-        if aggregate_all_models:
-            detail_df = (
-                model_series_df.groupby("competencia", as_index=False)["total_sem_info"]
-                .sum()
-                .rename(columns={"total_sem_info": "valor"})
-            )
-            detail_df["competencia_label"] = detail_df["competencia"].astype(str)
-            fig_detail = px.line(
-                detail_df,
-                x="competencia_label",
-                y="valor",
-                markers=True,
-                title=f"Evolução por modelo | MY {ano_fabricacao}",
-            )
-            fig_detail.update_traces(name="Todos os modelos", showlegend=True)
-            fig_detail.update_layout(legend_title_text="Modelo")
-        else:
-            selected_models = st.multiselect(
-                "Modelos no gráfico",
-                options=model_options,
-                default=default_models,
-                format_func=lambda code: top_models_df.loc[top_models_df["codigo_modelo"] == code, "nome_exibicao"].iloc[0],
-                key=f"sem_info_model_toggle_{ano_fabricacao}_{competencia}",
-            )
-            if not selected_models:
-                st.info("Selecione pelo menos um modelo para ver a evolução por modelo.")
-                return
+def render_sem_info_page(default_db_path: str):
+    render_header("Unidades Pré-Alocadas")
+    filters = render_sidebar(default_db_path)
 
-            detail_df = model_series_df[model_series_df["codigo_modelo"].isin(selected_models)].copy()
-            detail_df["competencia_label"] = detail_df["competencia"].astype(str)
-            fig_detail = px.line(
-                detail_df,
-                x="competencia_label",
-                y="total_sem_info",
-                color="nome_exibicao",
-                markers=True,
-                title=f"Evolução por modelo | MY {ano_fabricacao}",
-            )
-        fig_detail.update_layout(
-            xaxis_title="Mês",
-            yaxis_title="Unidades",
-            legend_title_text="Modelo",
-        )
-        st.plotly_chart(fig_detail, use_container_width=True)
+    st.caption(
+        "Uma leitura de potencial INVENTORY: motocicletas possivelmente em estoque, "
+        "ainda pendentes de emplacamento e sem destino territorial identificado."
+    )
+    render_sem_info_view(filters.db_path, filters.competencia)
 
 
 def build_line_chart_df(matrix_df, top_n: int = 8, selected_series: list[str] | None = None):
@@ -1013,6 +1348,37 @@ def render_search_explorer_view(db_path: str, competencia: str):
         },
     )
 
+    detail_candidates = snapshot_df.copy()
+    if not detail_candidates.empty:
+        detail_candidates["detail_label"] = detail_candidates.apply(
+            lambda row: (
+                f"{row['nome_exibicao']} | MY {int(row['ano_fabricacao'])}"
+                if pd.notna(row["ano_fabricacao"])
+                else f"{row['nome_exibicao']} | MY -"
+            ),
+            axis=1,
+        )
+        selected_detail_label = st.selectbox(
+            "Abrir detalhe do modelo",
+            options=detail_candidates["detail_label"].tolist(),
+            key="free_search_detail_selector",
+        )
+        selected_detail_row = detail_candidates.loc[
+            detail_candidates["detail_label"] == selected_detail_label
+        ].iloc[0]
+        if st.button("Ir para detalhe do modelo", key="free_search_detail_button"):
+            set_model_detail_context(
+                modelo=selected_detail_row["codigo_modelo"],
+                db_path=db_path,
+                competencia=competencia,
+                ano_fabricacao=(
+                    int(selected_detail_row["ano_fabricacao"])
+                    if pd.notna(selected_detail_row["ano_fabricacao"])
+                    else None
+                ),
+            )
+            st.switch_page("pages/modelo_detalhe.py")
+
     segment = st.selectbox(
         "Segmentar série por",
         options=["Consolidado", "Modelo", "Ano-modelo", "UF", "Município"],
@@ -1076,18 +1442,48 @@ def render_models_by_year(db_path: str, competencia: str):
 
     selected_years = sorted(selected_years)
     year_label = format_year_selection_label(selected_years)
-    matrix_df = enrich_models(get_model_year_monthly_matrix(db_path, tuple(selected_years), competencia))
-    registrations_df = enrich_models(get_model_year_registrations_matrix(db_path, tuple(selected_years), competencia))
     reference_month = format_reference_month(competencia)
+    commercial_years = get_commercial_years(db_path, competencia)
+    default_commercial_year = pd.Timestamp(competencia).year
+    if default_commercial_year not in commercial_years:
+        default_commercial_year = commercial_years[-1]
+    ano_comercial = st.selectbox(
+        "Ano comercial da matriz",
+        options=commercial_years,
+        index=commercial_years.index(default_commercial_year),
+        key="models_commercial_year_selector",
+    )
+    matrix_df = enrich_models(
+        get_model_year_monthly_matrix_by_commercial_year(
+            db_path,
+            tuple(selected_years),
+            competencia,
+            ano_comercial,
+        )
+    )
+    registrations_df = enrich_models(
+        get_model_year_registrations_matrix_by_commercial_year(
+            db_path,
+            tuple(selected_years),
+            competencia,
+            ano_comercial,
+        )
+    )
 
     st.subheader(f"Modelos | {year_label}")
     st.caption(f"Mês de referência: {reference_month}")
-    st.caption("Como ler: aqui o foco sai do macro e entra no mix de produto. Use as abas para alternar entre estoque acumulado e emplacamentos mensais.")
+    st.caption(f"Ano comercial exibido: {ano_comercial}")
+    st.caption("Como ler: aqui o foco sai do macro e entra no mix de produto. O mês de referência define a foto disponível da base; o ano comercial define qual calendário mensal a matriz plota.")
 
-    tab_frota, tab_emplacamentos, tab_territorio = st.tabs(["Frota", "Emplacamentos", "Território"])
+    tab_frota, tab_emplacamentos, tab_territorio = st.tabs(
+        ["Frota (estoque)", "Emplacamentos (delta mensal)", "Território"]
+    )
 
     with tab_frota:
-        st.caption("Como ler: cada linha é um modelo. As colunas mostram a evolução do estoque ao longo do ano. Quando houver um único MY selecionado, você também pode abrir o detalhe.")
+        st.caption(
+            "Como ler: cada linha é um modelo. As colunas mostram a evolução do estoque ao longo do ano. "
+            "Aqui janeiro representa a foto do mês, não o delta contra dezembro."
+        )
         if len(selected_years) == 1:
             render_matrix_detail_selector(
                 matrix_df,
@@ -1108,7 +1504,10 @@ def render_models_by_year(db_path: str, competencia: str):
         )
 
     with tab_emplacamentos:
-        st.caption("Como ler: aqui cada célula representa entrada do mês, não estoque. É a melhor visão para entender ritmo de emplacamento por modelo.")
+        st.caption(
+            "Como ler: aqui cada célula representa entrada do mês, não estoque. "
+            "Janeiro é calculado contra dezembro do ano anterior, e não contra zero."
+        )
         if len(selected_years) == 1:
             render_matrix_detail_selector(
                 registrations_df,
@@ -1149,8 +1548,6 @@ def render_dashboard(default_db_path: str):
     render_share_by_uf(filters.db_path, filters.competencia)
     st.divider()
     render_top_models_national(filters.db_path, filters.competencia)
-    st.divider()
-    render_sem_info_view(filters.db_path, filters.competencia)
     st.divider()
     render_search_explorer_view(filters.db_path, filters.competencia)
     st.divider()

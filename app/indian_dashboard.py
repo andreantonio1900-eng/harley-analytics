@@ -8,9 +8,13 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from app import queries
+from app.dashboard import render_registrations_macro_view
+from app.model_detail import build_cvo_tracker_df, format_reference_month, format_territory_label
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-INDIAN_DB_PATH = PROJECT_ROOT / "data" / "frota_indian_2026_04.duckdb"
+INDIAN_DB_PATH = PROJECT_ROOT / "data" / "frota_indian.duckdb"
 INDIAN_RED = "#7B1113"
 INDIAN_GOLD = "#B08D57"
 
@@ -72,13 +76,63 @@ def get_connection(db_path: str):
 
 
 @st.cache_data
-def load_snapshot(db_path: str) -> pd.DataFrame:
+def list_competencias(db_path: str) -> list[str]:
     con = get_connection(db_path)
-    df = con.execute("SELECT * FROM frota_indian").df()
+    df = con.execute("SELECT DISTINCT CAST(competencia AS VARCHAR) AS competencia FROM frota_indian ORDER BY competencia").df()
+    return df["competencia"].tolist()
+
+
+@st.cache_data
+def load_snapshot(db_path: str, competencia: str) -> pd.DataFrame:
+    con = get_connection(db_path)
+    df = con.execute("SELECT * FROM frota_indian WHERE competencia = ?", [competencia]).df()
     df["competencia"] = pd.to_datetime(df["competencia"])
     df["friendly_name"] = df["marca_modelo"].map(pretty_name)
     df["family"] = df["marca_modelo"].map(classify_indian_family)
     return df
+
+
+@st.cache_data
+def get_indian_registrations_macro_monthly(db_path: str) -> pd.DataFrame:
+    con = get_connection(db_path)
+    return queries.registrations_macro_monthly(con, table_name="frota_indian")
+
+
+@st.cache_data
+def get_dark_horse_variants(db_path: str) -> pd.DataFrame:
+    con = get_connection(db_path)
+    return con.execute(
+        """
+        SELECT marca_modelo, ano_fabricacao, SUM(qtd_veiculos) AS observacoes_historicas
+        FROM frota_indian
+        WHERE upper(marca_modelo) LIKE '%DARK HORSE%'
+           OR upper(marca_modelo) LIKE '%DARKHORSE%'
+           OR upper(marca_modelo) LIKE '%CHIEFT DH%'
+        GROUP BY marca_modelo, ano_fabricacao
+        ORDER BY marca_modelo, ano_fabricacao NULLS LAST
+        """
+    ).df()
+
+
+@st.cache_data
+def get_dark_horse_territory_series(
+    db_path: str,
+    modelo: str,
+    ano_fabricacao: int | None,
+) -> pd.DataFrame:
+    con = get_connection(db_path)
+    year_filter = "ano_fabricacao IS NULL" if ano_fabricacao is None else "ano_fabricacao = ?"
+    params = [modelo] if ano_fabricacao is None else [modelo, ano_fabricacao]
+    return con.execute(
+        f"""
+        SELECT competencia, uf, municipio, SUM(qtd_veiculos) AS qtd_veiculos
+        FROM frota_indian
+        WHERE marca_modelo = ? AND {year_filter}
+        GROUP BY competencia, uf, municipio
+        ORDER BY competencia, uf, municipio
+        """,
+        params,
+    ).df()
 
 
 def render_sidebar(default_db_path: str) -> str:
@@ -88,8 +142,17 @@ def render_sidebar(default_db_path: str) -> str:
         if not Path(db_path).expanduser().exists():
             st.error(f"Banco não encontrado: {db_path}")
             st.stop()
-        st.caption("Snapshot dedicado da frota Indian no Brasil referente a abril de 2026.")
-    return db_path
+        competencias = list_competencias(db_path)
+        if not competencias:
+            st.error("Nenhuma competência encontrada na base Indian.")
+            st.stop()
+        competencia = st.selectbox(
+            "Mês de referência",
+            options=competencias,
+            index=len(competencias) - 1,
+        )
+        st.caption("Snapshot dedicado da frota Indian no Brasil.")
+    return db_path, competencia
 
 
 def render_kpis(df: pd.DataFrame):
@@ -165,6 +228,86 @@ def render_models(df: pd.DataFrame):
         )
         fig.update_layout(xaxis_title="Frota", yaxis_title="Modelo")
         st.plotly_chart(fig, use_container_width=True)
+
+
+def render_dark_horse_tracker(db_path: str):
+    st.subheader("Dark Horse | Tracker de unidades")
+    st.caption(
+        "Reconstrução mensal das poucas unidades Dark Horse encontradas na base. "
+        "Cada linha representa uma unidade estimada e mostra os territórios em que ela apareceu ao longo do tempo."
+    )
+
+    variants_df = get_dark_horse_variants(db_path)
+    if variants_df.empty:
+        st.info("Nenhuma variante Dark Horse foi encontrada na base Indian.")
+        return
+
+    variants_df = variants_df.copy()
+    variants_df["friendly_name"] = variants_df["marca_modelo"].map(pretty_name)
+    variants_df["variant_key"] = variants_df.apply(
+        lambda row: f"{row['marca_modelo']}|{'SEM_MY' if pd.isna(row['ano_fabricacao']) else int(row['ano_fabricacao'])}",
+        axis=1,
+    )
+    labels = {}
+    for _, row in variants_df.iterrows():
+        year_label = "Sem MY" if pd.isna(row["ano_fabricacao"]) else f"MY {int(row['ano_fabricacao'])}"
+        labels[row["variant_key"]] = f"{row['friendly_name']} | {year_label}"
+
+    selected_key = st.selectbox(
+        "Modelo e ano-modelo",
+        options=variants_df["variant_key"].tolist(),
+        format_func=lambda key: labels[key],
+        key="indian_dark_horse_tracker_variant",
+    )
+    selected = variants_df.loc[variants_df["variant_key"] == selected_key].iloc[0]
+    selected_year = None if pd.isna(selected["ano_fabricacao"]) else int(selected["ano_fabricacao"])
+    territory_df = get_dark_horse_territory_series(
+        db_path,
+        str(selected["marca_modelo"]),
+        selected_year,
+    )
+    if territory_df.empty:
+        st.info("Sem histórico territorial para a variante selecionada.")
+        return
+
+    tracker_df, peak_units, current_units = build_cvo_tracker_df(territory_df)
+    latest_month = format_reference_month(territory_df["competencia"].max())
+    max_licenses = max(
+        [int(column.split(". ")[1]) for column in tracker_df.columns if column.startswith("Lic. ")],
+        default=0,
+    )
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Pico rastreado", peak_units)
+    k2.metric("Na última foto disponível", current_units, delta=latest_month)
+    k3.metric("Máx. de movimentos", max_licenses)
+
+    st.dataframe(
+        tracker_df,
+        use_container_width=True,
+        hide_index=True,
+        height=min(560, 70 + len(tracker_df) * 35),
+    )
+
+    latest_competencia = pd.to_datetime(territory_df["competencia"]).max()
+    current_df = territory_df[pd.to_datetime(territory_df["competencia"]) == latest_competencia].copy()
+    current_df["territorio"] = current_df.apply(
+        lambda row: format_territory_label(row["municipio"], row["uf"]),
+        axis=1,
+    )
+    current_df = current_df.sort_values(["qtd_veiculos", "territorio"], ascending=[False, True])
+    with st.expander("Ver distribuição na última foto disponível"):
+        st.dataframe(
+            current_df[["territorio", "qtd_veiculos"]],
+            use_container_width=True,
+            hide_index=True,
+            column_config={"territorio": "Território", "qtd_veiculos": "Unidades"},
+        )
+
+    st.caption(
+        "Limite metodológico: a SENATRAN publica contagens agregadas por município, não VINs. "
+        "Movimentos individuais são inferidos pelas variações mensais e devem ser lidos como trajetórias prováveis."
+    )
 
 
 def render_family_mix(df: pd.DataFrame):
@@ -389,13 +532,24 @@ def render_years_and_pending(df: pd.DataFrame):
 
 
 def render_indian_dashboard(default_db_path: str = str(INDIAN_DB_PATH)):
-    db_path = render_sidebar(default_db_path)
-    df = load_snapshot(db_path)
+    db_path, competencia = render_sidebar(default_db_path)
+    df = load_snapshot(db_path, competencia)
 
-    st.title("Indian Motorcycle | Brasil | Abr/26")
-    st.caption("Snapshot dedicado da frota Indian no Brasil, extraído do arquivo nacional de abril de 2026.")
+    st.title("Indian Motorcycle | Brasil")
+    st.caption(f"Snapshot dedicado da frota Indian no Brasil | Mês de referência: {competencia}")
 
     render_kpis(df)
+    st.divider()
+    render_registrations_macro_view(
+        db_path,
+        competencia,
+        brand_label="Indian",
+        accent_color=INDIAN_RED,
+        key_prefix="indian_registrations",
+        registrations_df=get_indian_registrations_macro_monthly(db_path),
+    )
+    st.divider()
+    render_dark_horse_tracker(db_path)
     st.divider()
     render_models(df)
     st.divider()
