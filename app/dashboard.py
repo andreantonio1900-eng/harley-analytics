@@ -328,6 +328,27 @@ def render_sidebar(default_db_path: str) -> DashboardFilters:
 
 
 def render_kpis(db_path: str, competencia: str):
+    st.markdown(
+        """
+        <style>
+        [data-testid="stMetric"] {
+            overflow: visible;
+        }
+        [data-testid="stMetricLabel"] p,
+        [data-testid="stMetricValue"],
+        [data-testid="stMetricValue"] > div,
+        [data-testid="stMetricDelta"] > div {
+            white-space: normal !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            overflow-wrap: anywhere;
+            word-break: normal;
+            line-height: 1.15;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     kpi = get_info(db_path)
     fleet_snapshot = get_fleet_national_snapshot(db_path, competencia)
     top_model_year = get_top_model_year_national(db_path, competencia)
@@ -1541,9 +1562,9 @@ def render_dashboard(default_db_path: str):
 
     filters = render_sidebar(default_db_path)
 
-    render_search_explorer_view(filters.db_path, filters.competencia)
-    st.divider()
     render_kpis(filters.db_path, filters.competencia)
+    st.divider()
+    render_search_explorer_view(filters.db_path, filters.competencia)
     st.divider()
     registrations_col, divider_col, fleet_distribution_col = st.columns(
         (1, 0.025, 1),
